@@ -299,6 +299,13 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
     const slot=normalizeSlot(todayPlan[m]);
     if(!slot)return{meal:m,slot:null,recipe:null};
     if(slot.slotType==='eating_out')return{meal:m,slot,recipe:null,isEatingOut:true};
+    if(slot.leftoverFrom){
+      const prevWeek=mealPlan[shiftWeek(currentWeek,-1)]||{};
+      const origin=getOriginSlot(weekPlan,slot,prevWeek);
+      if(origin?.slotType==='eating_out')return{meal:m,slot,recipe:null,isEatingOut:true,eoLabel:origin.label||'Eating out'};
+      const recipe=origin?.recipeId?recipes[origin.recipeId]:null;
+      return{meal:m,slot,recipe};
+    }
     const recipe=slot.recipeId?recipes[slot.recipeId]:null;
     return{meal:m,slot,recipe};
   });
@@ -484,7 +491,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
               ):isEatingOut?(
                 <div className="flex-1 flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
                   <UtensilsCrossed className="w-3.5 h-3.5 text-amber-600 flex-shrink-0"/>
-                  <span className="text-sm text-amber-800">{slot.label||'Eating out'}</span>
+                  <span className="text-sm text-amber-800">{eoLabel||slot.label||'Eating out'}</span>
                 </div>
               ):(
                 <button onClick={onGoToWeek} className="flex-1 text-xs text-stone-400 hover:text-stone-600 bg-stone-50 rounded-xl px-3 py-2.5 text-left border border-dashed border-stone-200 hover:border-stone-400">
