@@ -65,6 +65,11 @@ const GPI={egg:56,onion:150,garlic:5,tomato:120,potato:213,carrot:60,apple:180,l
 function lookupBySub(table,name){const n=(name||'').toLowerCase().trim();if(!n)return null;if(table[n]!=null)return table[n];const keys=Object.keys(table).sort((a,b)=>b.length-a.length);for(const k of keys){if(n.includes(k))return table[k];}return null;}
 function ingredientToGrams(ing){if(!ing)return null;if(typeof ing.grams==='number'&&ing.grams>0)return ing.grams;const qty=ing.quantity;if(!qty||qty<=0)return null;const unit=(ing.unit||'').toLowerCase().trim();if(GPW[unit]!=null)return qty*GPW[unit];if(VTC[unit]!=null){const cups=qty*VTC[unit];const d=lookupBySub(GPC,ing.name);return d!=null?cups*d:null;}if(!unit){const ig=lookupBySub(GPI,ing.name);return ig!=null?qty*ig:null;}return null;}
 function formatGrams(g){if(g==null||isNaN(g))return null;return g<10?`${Math.round(g*10)/10}g`:`${Math.round(g)}g`;}
+// Unit abbreviations — applied everywhere units are displayed
+const UNIT_ABBR={'tablespoon':'tbsp','tablespoons':'tbsp','teaspoon':'tsp','teaspoons':'tsp','ounce':'oz','ounces':'oz','pound':'lb','pounds':'lb','gram':'g','grams':'g','kilogram':'kg','kilograms':'kg','milliliter':'ml','milliliters':'ml','liter':'L','liters':'L','fluid ounce':'fl oz','fluid ounces':'fl oz','package':'pkg','packages':'pkg','slice':'sl','slices':'sl','clove':'clv','cloves':'clv','inch':'in','inches':'in'};
+function abbreviateUnit(u){if(!u)return'';const l=u.toLowerCase().trim();return UNIT_ABBR[l]||u;}
+function fmtUnit(qty,unit){return`${formatQuantity(qty)}${abbreviateUnit(unit)?' '+abbreviateUnit(unit):''}`.trim();}
+
 function extractJSON(text){let clean=text.replace(/```json\s*/gi,'').replace(/```/g,'').trim();const am=clean.match(/\[[\s\S]*\]/),om=clean.match(/\{[\s\S]*\}/);if(am&&(!om||am.index<om.index))clean=am[0];else if(om)clean=om[0];return JSON.parse(clean);}
 
 // ---------- API ----------
@@ -244,7 +249,7 @@ Use realistic values. If you can't estimate an ingredient, make a reasonable ass
 // FEATURE 2: HOME / "COOK TONIGHT" DASHBOARD
 // ============================================================
 
-function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, onQuickLog}){
+function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, onQuickLog, onSaveRecipeGuide, onPrepWeek}){
   const today=getTodayDayKey();
   const weekPlan=mealPlan[currentWeek]||{};
   const todayPlan=weekPlan[today]||{};
@@ -262,12 +267,103 @@ function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, o
   const nextUncooked=todayMeals.find(({recipe,slot,isEatingOut})=>recipe&&slot&&!isEatingOut);
   const todayDate=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
 
-  // Cook mode — step-by-step
+  // Prep guide + cook mode
+  const[prepGuide,setPrepGuide]=useState(null); // {recipe, guide, loading, isMealPrep, multiplier}
+  const[showIngredients,setShowIngredients]=useState(false);
+
+  async function startCooking(recipe,isMealPrep=false){
+    const multiplier=isMealPrep?(()=>{
+      // find week plan multiplier for this recipe
+      const week=mealPlan[currentWeek]||{};
+      for(const d of DAYS){const dp=week[d.key]||{};for(const m of MEALS){const s=normalizeSlot(dp[m]);if(s?.recipeId===recipe.id)return s.multiplier||1;}}
+      return 1;
+    })():1;
+    const cachedGuide=isMealPrep?recipe.mealPrepGuide:recipe.prepGuide;
+    setPrepGuide({recipe,guide:cachedGuide||null,loading:!cachedGuide,isMealPrep,multiplier});
+    if(!recipe.prepGuide){
+      try{
+        const ings=(recipe.ingredients||[]).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ');
+        const steps=(recipe.instructions||[]).map((s,i)=>`${i+1}. ${s}`).join('
+');
+        const prompt=isMealPrep
+          ?`You are a meal prep coach. For batch cooking this recipe (${multiplier}x servings), give an optimized parallel-task prep guide.
+Recipe: ${recipe.name}
+Ingredients: ${ings}
+Steps:
+${steps}
+Return ONLY JSON: {"overview":"string (1-2 sentences on the plan)","phases":[{"phase":"string (e.g. First - 5 min)","tasks":["string"],"canDoAhead":"boolean","aheadTiming":"string or null"}],"storageNotes":"string"}`
+          :`You are a cooking coach. Analyze this recipe and identify what can be prepped ahead of time vs what must be done during cooking.
+Recipe: ${recipe.name}
+Ingredients: ${ings}
+Steps:
+${steps}
+Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhead":[{"what":"string","relatedSteps":[number],"howFarAhead":"string (e.g. up to 3 days, 1 hour before, morning of)","tip":"string"}],"cookingNotes":"string (any key tips for the actual cook)"}`;
+        const result=extractJSON(await callAI(prompt,{smart:true}));
+        setPrepGuide(g=>({...g,guide:result,loading:false}));
+        // cache on recipe
+        if(onSaveRecipeGuide)onSaveRecipeGuide(recipe.id,result,isMealPrep);
+      }catch(e){setPrepGuide(g=>({...g,loading:false,error:'Could not generate prep guide.'}));}
+    }
+  }
+
+  if(prepGuide&&!cookingMode){
+    const{recipe,guide,loading,error,isMealPrep,multiplier}=prepGuide;
+    return(
+      <div className="max-w-lg mx-auto">
+        <button onClick={()=>setPrepGuide(null)} className="flex items-center gap-1.5 text-sm text-stone-600 mb-4 hover:text-stone-900"><ChevronLeft className="w-4 h-4"/> Back</button>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex-1">
+            <p className="text-xs uppercase tracking-wider text-orange-700 font-medium mb-0.5">{isMealPrep?`Meal prep · ${multiplier}x`:'Prep guide'}</p>
+            <h2 className="font-display text-2xl font-medium">{recipe.name}</h2>
+          </div>
+          <button onClick={()=>startCooking(recipe,isMealPrep)} className="p-1.5 rounded-full text-stone-400 hover:text-orange-700" title="Regenerate"><RefreshCw className="w-4 h-4"/></button>
+        </div>
+        {loading&&<div className="flex items-center gap-2 py-8 justify-center text-stone-500"><Loader2 className="w-5 h-5 animate-spin text-orange-600"/><span>Generating prep guide…</span></div>}
+        {error&&<p className="text-sm text-red-600 mb-4">{error}</p>}
+        {guide&&!loading&&(isMealPrep?(
+          <div className="space-y-4 mb-6">
+            {guide.overview&&<p className="text-sm text-stone-600 bg-orange-50 border border-orange-100 rounded-xl p-3">{guide.overview}</p>}
+            {(guide.phases||[]).map((ph,i)=>(
+              <div key={i} className={`rounded-2xl border p-4 ${ph.canDoAhead?'border-emerald-200 bg-emerald-50/30':'border-stone-200 bg-white'}`}>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-stone-600">{ph.phase}</span>
+                  {ph.canDoAhead&&<span className="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">Can prep ahead{ph.aheadTiming?` · ${ph.aheadTiming}`:''}</span>}
+                </div>
+                <ul className="space-y-1">{(ph.tasks||[]).map((t,j)=><li key={j} className="text-sm text-stone-700 flex gap-2"><span className="text-stone-300 flex-shrink-0">·</span>{t}</li>)}</ul>
+              </div>
+            ))}
+            {guide.storageNotes&&<div className="bg-stone-50 border border-stone-200 rounded-xl p-3"><p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-1">Storage</p><p className="text-sm text-stone-600">{guide.storageNotes}</p></div>}
+          </div>
+        ):(
+          <div className="space-y-4 mb-6">
+            {guide.overview&&<p className="text-sm text-stone-600 bg-orange-50 border border-orange-100 rounded-xl p-3">{guide.overview}</p>}
+            {(guide.prepAhead||[]).length>0&&<div>
+              <p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-2">Prep ahead</p>
+              <div className="space-y-3">{(guide.prepAhead||[]).map((p,i)=>(
+                <div key={i} className="bg-white border border-stone-200 rounded-xl p-3">
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <span className="text-sm font-medium text-stone-800">{p.what}</span>
+                    <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0">{p.howFarAhead}</span>
+                  </div>
+                  {p.relatedSteps?.length>0&&<p className="text-xs text-stone-400 mb-1">Steps {p.relatedSteps.join(', ')}</p>}
+                  {p.tip&&<p className="text-xs text-stone-500 italic">{p.tip}</p>}
+                </div>
+              ))}</div>
+            </div>}
+            {guide.cookingNotes&&<div className="bg-stone-50 border border-stone-200 rounded-xl p-3"><p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-1">Tips for cooking day</p><p className="text-sm text-stone-600">{guide.cookingNotes}</p></div>}
+          </div>
+        ))}
+        {!loading&&<button onClick={()=>setCookingMode({recipe,stepIdx:0})} className="w-full py-3 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800 flex items-center justify-center gap-2"><Play className="w-4 h-4 fill-current"/> Start step-by-step cooking</button>}
+      </div>
+    );
+  }
+
   if(cookingMode){
     const{recipe,stepIdx}=cookingMode;
     const steps=recipe.instructions||[];
     const step=steps[stepIdx];
     const isLast=stepIdx===steps.length-1;
+    const allIngs=recipe.ingredients||[];
     return(
       <div className="max-w-lg mx-auto">
         <button onClick={()=>setCookingMode(null)} className="flex items-center gap-1.5 text-sm text-stone-600 mb-6 hover:text-stone-900"><ChevronLeft className="w-4 h-4"/> Back</button>
@@ -275,31 +371,28 @@ function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, o
           <span className="text-xs uppercase tracking-wider text-orange-700 font-medium">{recipe.name}</span>
           <span className="text-xs text-stone-400">Step {stepIdx+1} of {steps.length}</span>
         </div>
-        {/* Progress bar */}
         <div className="w-full bg-stone-100 rounded-full h-1.5 mb-6">
           <div className="h-full bg-orange-700 rounded-full transition-all" style={{width:`${((stepIdx+1)/steps.length)*100}%`}}/>
         </div>
-        <div className="bg-white border border-stone-200 rounded-2xl p-6 mb-6 min-h-[180px] flex flex-col justify-center">
+        <div className="bg-white border border-stone-200 rounded-2xl p-6 mb-4 min-h-[180px] flex flex-col justify-center">
           <span className="font-display text-5xl text-orange-100 font-medium mb-3">{stepIdx+1}.</span>
           <p className="text-stone-800 text-lg leading-relaxed">{step}</p>
         </div>
-        {/* Relevant ingredients for this step */}
-        {(()=>{
-          const stepLower=step.toLowerCase();
-          const relevant=(recipe.ingredients||[]).filter(ing=>{
-            const name=ing.name.toLowerCase().trim();
-            const singular=normalizeIngredientName(name);
-            // Use full name and singular only — no single-word splits (causes false positives)
-            // e.g. "coconut oil" must not match a step that only mentions "coconut sugar"
-            const variants=[...new Set([name,singular])].filter(v=>v.length>2);
-            return variants.some(v=>{
-              const escaped=v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-              return new RegExp('(^|[\\s,/])'+escaped+'([\\s,./)]|$)','i').test(stepLower);
-            });
-          });
-          if(!relevant.length)return null;
-          return<div className="mb-6"><p className="text-xs uppercase tracking-wider text-stone-400 mb-2">Used in this step</p><div className="flex flex-wrap gap-2">{relevant.map((i,idx)=><span key={idx} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{formatQuantity(i.quantity)}{i.unit&&` ${i.unit}`} {i.name}</span>)}</div></div>;
-        })()}
+        {/* Collapsible ingredient reference */}
+        <div className="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden">
+          <button onClick={()=>setShowIngredients(v=>!v)} className="w-full flex items-center justify-between px-4 py-3 text-sm text-stone-600 hover:bg-stone-50">
+            <span className="flex items-center gap-2"><Package className="w-3.5 h-3.5"/> All ingredients ({allIngs.length})</span>
+            {showIngredients?<ChevronUp className="w-4 h-4"/>:<ChevronDown className="w-4 h-4"/>}
+          </button>
+          {showIngredients&&<div className="px-4 pb-4 border-t border-stone-100">
+            <div className="mt-3 space-y-1">{allIngs.map((ing,i)=>(
+              <div key={i} className="flex items-center gap-2 text-sm">
+                <span className="font-medium text-stone-900 w-20 flex-shrink-0 text-xs">{fmtUnit(ing.quantity,ing.unit)}</span>
+                <span className="text-stone-700">{ing.name}</span>
+              </div>
+            ))}</div>
+          </div>}
+        </div>
         <div className="flex gap-3">
           <button onClick={()=>setCookingMode(c=>({...c,stepIdx:Math.max(0,c.stepIdx-1)}))} disabled={stepIdx===0} className="flex-1 py-3 rounded-full border border-stone-200 text-sm text-stone-600 disabled:opacity-30 hover:bg-stone-50">← Back</button>
           {isLast?(
@@ -335,7 +428,7 @@ function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, o
                   <button onClick={()=>onSelectRecipe(recipe.id)} className="font-display text-sm hover:text-orange-700 text-left flex-1">{recipe.name}</button>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     {recipe.nutrition&&<NutritionBadge nutrition={recipe.nutrition}/>}
-                    <button onClick={()=>setCookingMode({recipe,stepIdx:0})} className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800">
+                    <button onClick={()=>startCooking(recipe,false)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800">
                       <Play className="w-3 h-3 fill-current"/> Cook
                     </button>
                   </div>
@@ -365,16 +458,27 @@ function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, o
             {nextUncooked.recipe.nutrition&&<> · ~{Math.round(nextUncooked.recipe.nutrition.calories)} cal/serving</>}
           </p>
           <div className="flex gap-2">
-            <button onClick={()=>setCookingMode({recipe:nextUncooked.recipe,stepIdx:0})} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800">
+            <button onClick={()=>startCooking(nextUncooked.recipe,false)} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800">
               <Play className="w-4 h-4 fill-current"/> Start cooking
             </button>
-            <button onClick={()=>onSelectRecipe(nextUncooked.recipe.id)} className="flex items-center gap-2 px-4 py-2.5 rounded-full border border-orange-200 text-orange-700 text-sm hover:bg-orange-100">
-              View recipe
+            <button onClick={()=>startCooking(nextUncooked.recipe,true)} className="flex items-center gap-2 px-4 py-2.5 rounded-full border border-orange-200 text-orange-700 text-sm hover:bg-orange-100">
+              Meal prep
+            </button>
+            <button onClick={()=>onSelectRecipe(nextUncooked.recipe.id)} className="flex items-center gap-2 px-3 py-2.5 rounded-full border border-stone-200 text-stone-600 text-sm hover:bg-stone-100">
+              View
             </button>
           </div>
         </div>
       )}
 
+      {/* Prep this week */}
+      <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
+        <h3 className="font-display text-lg mb-1">Prep this week</h3>
+        <p className="text-sm text-stone-500 mb-3">See what can be made ahead across all this week's recipes.</p>
+        <button onClick={onPrepWeek} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800">
+          <ListOrdered className="w-4 h-4"/> Weekly prep guide
+        </button>
+      </div>
       {/* Quick log */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between mb-1">
@@ -437,7 +541,7 @@ function RecipeCard({recipe,onClick}){
 }
 
 // ---------- RecipeForm ----------
-function RecipeForm({initial,onSave,onCancel}){
+function RecipeForm({initial,onSave,onCancel,onDelete}){
   const[recipe,setRecipe]=useState(()=>initial||{name:'',servings:4,prepTime:15,cookTime:30,cuisine:'American',course:'Main',tags:[],ingredients:[{name:'',quantity:1,unit:'',category:'produce'}],instructions:[''],source:'',notes:''});
   const[generatingPhoto,setGeneratingPhoto]=useState(false);
   const u=(f,v)=>setRecipe(r=>({...r,[f]:v}));
@@ -498,9 +602,12 @@ function RecipeForm({initial,onSave,onCancel}){
         <div><label className={lc}>Source</label><input value={recipe.source||''} onChange={e=>u('source',e.target.value)} placeholder="URL, cookbook, 'Mom'" className={ic}/></div>
         <div><label className={lc}>Notes</label><input value={recipe.notes||''} onChange={e=>u('notes',e.target.value)} placeholder="Worked best with bone-in thighs" className={ic}/></div>
       </div>
-      <div className="flex gap-3 justify-end pt-2 border-t border-stone-100">
-        {onCancel&&<button onClick={onCancel} className="px-4 py-2 rounded-full text-sm text-stone-600 hover:bg-stone-100">Cancel</button>}
-        <button onClick={handleSave} className="px-5 py-2 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800 flex items-center gap-2"><Save className="w-4 h-4"/> Save recipe</button>
+      <div className="flex items-center justify-between pt-2 border-t border-stone-100">
+        {onDelete&&<button onClick={onDelete} className="px-4 py-2 rounded-full text-sm text-red-600 hover:bg-red-50 flex items-center gap-1.5"><Trash2 className="w-3.5 h-3.5"/> Delete recipe</button>}
+        <div className="flex gap-3 ml-auto">
+          {onCancel&&<button onClick={onCancel} className="px-4 py-2 rounded-full text-sm text-stone-600 hover:bg-stone-100">Cancel</button>}
+          <button onClick={handleSave} className="px-5 py-2 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800 flex items-center gap-2"><Save className="w-4 h-4"/> Save recipe</button>
+        </div>
       </div>
     </div>
   );
@@ -612,7 +719,17 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
   const sel=DAYS[selDayIdx]||DAYS[0];
   return(
     <div>
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3"><div><h2 className="font-display text-4xl tracking-tight">This week</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)}</p></div><div className="flex items-center gap-1"><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button><button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button></div></div>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <h2 className="font-display text-4xl tracking-tight">This week</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-5 h-5"/></button>
+          <div className="text-center">
+            <p className="font-display text-lg font-medium leading-tight">{formatWeekRange(currentWeek)}</p>
+          </div>
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-5 h-5"/></button>
+        </div>
+        <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100">Today</button>
+      </div>
       <div className="lg:hidden"><div className="flex gap-1.5 mb-4 overflow-x-auto -mx-4 px-4 pb-1">{DAYS.map((d,i)=>{const dp=week[d.key]||{},filled=MEALS.filter(m=>dp[m]).length,active=selDayIdx===i;return(<button key={d.key} onClick={()=>setSelDayIdx(i)} className={`flex flex-col items-center gap-0.5 px-3.5 py-2 rounded-xl text-xs whitespace-nowrap flex-shrink-0 ${active?'bg-stone-900 text-stone-50':'bg-white border border-stone-200 text-stone-600'}`}><span className="font-medium">{d.label.slice(0,3)}</span><span className="text-[10px] text-stone-400">{filled>0?filled:'–'}</span></button>);})}</div><div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="relative overflow-hidden">{renderDay(sel)}<div className="flex justify-between mt-3 px-1"><button onClick={()=>setSelDayIdx(i=>Math.max(i-1,0))} disabled={selDayIdx===0} className="p-1.5 rounded-full text-stone-400 disabled:opacity-0 hover:bg-stone-100"><ChevronLeft className="w-4 h-4"/></button><span className="text-xs text-stone-400 self-center">swipe to navigate</span><button onClick={()=>setSelDayIdx(i=>Math.min(i+1,DAYS.length-1))} disabled={selDayIdx===DAYS.length-1} className="p-1.5 rounded-full text-stone-400 disabled:opacity-0 hover:bg-stone-100"><ChevronRight className="w-4 h-4"/></button></div></div></div>
       <div className="hidden lg:grid lg:grid-cols-7 gap-3">{DAYS.map(d=><div key={d.key}>{renderDay(d)}</div>)}</div>
     </div>
@@ -676,7 +793,7 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
 
   function buildShareText(){
     const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${ti} items\n`];
-    for(const cat of orderedCats.filter(c=>grocery[c]?.length>0)){lines.push(`${cat.toUpperCase()}`);for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${formatQuantity(item.quantity)}${item.unit?' '+item.unit:''} ${item.name}`);}lines.push('');}
+    for(const cat of orderedCats.filter(c=>grocery[c]?.length>0)){lines.push(`${cat.toUpperCase()}`);for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${fmtUnit(item.quantity,item.unit)} ${item.name}`);}lines.push('');}
     return lines.join('\n').trim();
   }
   async function shareList(){
@@ -694,9 +811,10 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div><h2 className="font-display text-4xl tracking-tight">Grocery list</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)} · {ti} items · {cc} checked</p></div>
         <div className="flex items-center gap-1">
-          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button>
-          <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button>
-          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button>
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-5 h-5"/></button>
+          <p className="font-display text-base font-medium">{formatWeekRange(currentWeek)}</p>
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-5 h-5"/></button>
+          <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100">Today</button>
         </div>
       </div>
 
@@ -749,7 +867,7 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
                     <div key={item.key} className="flex items-center">
                       <button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left">
                         <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div>
-                        <span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{formatQuantity(item.quantity)}{item.unit&&` ${item.unit}`}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span>
+                        <span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span>
                       </button>
                       {item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}
                     </div>
@@ -802,21 +920,58 @@ function QuickLogModal({onClose,onLog,recipes}){
 }
 
 // ---------- Meal History ----------
-function MealHistorySection({mealHistory,recipes}){
+function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry}){
   const cutoff=Date.now()-30*24*60*60*1000;
   const recent=(mealHistory||[]).filter(h=>h.date>cutoff).sort((a,b)=>b.date-a.date);
+  const[editingId,setEditingId]=useState(null);
+  const[editForm,setEditForm]=useState({});
+
+  function startEdit(h){setEditingId(h.id);setEditForm({label:h.label||h.text||'',meal:h.meal||'dinner'});}
+  function saveEdit(){onEditEntry(editingId,editForm);setEditingId(null);}
+
   if(recent.length===0)return(<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-2 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Meal history</h3><p className="text-sm text-stone-500">No meals logged yet. Use quick log or mark meals as cooked.</p></div>);
   const byDate={};for(const h of recent){const d=new Date(h.date).toLocaleDateString('en-US',{month:'short',day:'numeric',weekday:'short'});if(!byDate[d])byDate[d]=[];byDate[d].push(h);}
   return(
     <div className="bg-white border border-stone-200 rounded-2xl p-5">
       <h3 className="font-display text-lg mb-4 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Last 30 days</h3>
-      <div className="space-y-4">{Object.entries(byDate).slice(0,14).map(([date,entries])=>(<div key={date}><p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-1.5">{date}</p><div className="space-y-1">{entries.map((h,i)=>{const recipe=h.recipeId?recipes[h.recipeId]:null;return(<div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-stone-50"><span className="text-xs text-stone-400 w-14 flex-shrink-0 capitalize">{h.meal||''}</span>{h.slotType==='eating_out'?<UtensilsCrossed className="w-3.5 h-3.5 text-amber-500 flex-shrink-0"/>:<ChefHat className="w-3.5 h-3.5 text-orange-400 flex-shrink-0"/>}<span className="text-sm text-stone-700 flex-1">{recipe?.name||h.label||h.text||'Meal'}</span>{h.rating&&<span className="text-xs text-orange-500">{'★'.repeat(h.rating)}</span>}</div>);})}</div></div>))}</div>
+      <div className="space-y-4">{Object.entries(byDate).slice(0,14).map(([date,entries])=>(
+        <div key={date}>
+          <p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-1.5">{date}</p>
+          <div className="space-y-1">{entries.map((h,i)=>{
+            const recipe=h.recipeId?recipes[h.recipeId]:null;
+            if(editingId===h.id)return(
+              <div key={i} className="bg-stone-100 rounded-xl p-3 space-y-2">
+                <input value={editForm.label} onChange={e=>setEditForm(f=>({...f,label:e.target.value}))} className="w-full px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none"/>
+                <div className="flex gap-2">
+                  <select value={editForm.meal} onChange={e=>setEditForm(f=>({...f,meal:e.target.value}))} className="px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none flex-1">
+                    {MEALS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}
+                  </select>
+                  <button onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-stone-900 text-white text-xs">Save</button>
+                  <button onClick={()=>setEditingId(null)} className="px-3 py-1.5 rounded-lg border border-stone-200 text-xs text-stone-600">Cancel</button>
+                </div>
+              </div>
+            );
+            return(
+              <div key={i} className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-stone-50 group">
+                <span className="text-xs text-stone-400 w-14 flex-shrink-0 capitalize">{h.meal||''}</span>
+                {h.slotType==='eating_out'?<UtensilsCrossed className="w-3.5 h-3.5 text-amber-500 flex-shrink-0"/>:<ChefHat className="w-3.5 h-3.5 text-orange-400 flex-shrink-0"/>}
+                <span className="text-sm text-stone-700 flex-1">{recipe?.name||h.label||h.text||'Meal'}</span>
+                {h.rating&&<span className="text-xs text-orange-500">{'★'.repeat(h.rating)}</span>}
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                  <button onClick={()=>startEdit(h)} className="p-1 rounded text-stone-400 hover:text-stone-700"><Edit2 className="w-3 h-3"/></button>
+                  <button onClick={()=>onDeleteEntry(h.id,h.recipeId)} className="p-1 rounded text-stone-400 hover:text-red-600"><Trash2 className="w-3 h-3"/></button>
+                </div>
+              </div>
+            );
+          })}</div>
+        </div>
+      ))}</div>
     </div>
   );
 }
 
 // ---------- Insights ----------
-function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog}){
+function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory}){
   const[suggestions,setSuggestions]=useState([]);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
   const stats=useMemo(()=>{const total=recipes.length,ctm=recipes.filter(r=>r.lastCooked&&(Date.now()-r.lastCooked)/86400000<=30).length;const cc={},ic={};let tct=0,tr=0;for(const r of recipes){cc[r.cuisine||'Other']=(cc[r.cuisine||'Other']||0)+1;for(const ing of r.ingredients||[]){const n=normalizeIngredientName(ing.name);ic[n]=(ic[n]||0)+1;}const t=(r.prepTime||0)+(r.cookTime||0);if(t>0){tct+=t;tr++;}}return{total,cookedThisMonth:ctm,cuisineRanked:Object.entries(cc).sort((a,b)=>b[1]-a[1]),ingredientRanked:Object.entries(ic).sort((a,b)=>b[1]-a[1]).slice(0,10),topRated:recipes.filter(r=>r.rating==='up').slice(0,5),mostCooked:[...recipes].sort((a,b)=>(b.cookCount||0)-(a.cookCount||0)).filter(r=>r.cookCount>0).slice(0,5),avgTime:tr?Math.round(tct/tr):0};},[recipes]);
   async function suggest(){setLoading(true);setError(null);try{setSuggestions(extractJSON(await callAI(`Suggest 5 NEW recipes for: cuisines: ${stats.cuisineRanked.slice(0,3).map(([c,n])=>`${c}(${n})`).join(',')}, ingredients: ${stats.ingredientRanked.slice(0,8).map(([i])=>i).join(',')}, avg time: ${stats.avgTime||30}min, already has: ${recipes.map(r=>r.name).join(',').slice(0,500)}. Return ONLY JSON: [{"name":"string","cuisine":"string","why":"string","totalTime":number,"highlights":["string"]}]`,{smart:true})));}catch(e){setError(e.message);}finally{setLoading(false);}}
@@ -830,7 +985,7 @@ function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog}){
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6"><StatCard label="Recipes" value={stats.total}/><StatCard label="Cooked this month" value={stats.cookedThisMonth}/><StatCard label="Avg total time" value={`${stats.avgTime}m`}/><StatCard label="Top rated" value={stats.topRated.length}/></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Cuisine breakdown</h3><div className="space-y-2">{stats.cuisineRanked.slice(0,6).map(([c,n])=>(<div key={c} className="flex items-center gap-3"><span className="text-sm text-stone-600 w-32 truncate">{c}</span><div className="flex-1 bg-stone-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-orange-700" style={{width:`${(n/mx)*100}%`}}/></div><span className="text-xs text-stone-500 w-6 text-right">{n}</span></div>))}</div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Most-used ingredients</h3><div className="flex flex-wrap gap-2">{stats.ingredientRanked.map(([i,n])=><span key={i} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{i} <span className="text-stone-400">·{n}</span></span>)}</div></div></div>
       {(stats.mostCooked.length>0||stats.topRated.length>0)&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">{stats.mostCooked.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><Flame className="w-4 h-4 text-orange-700"/> Most cooked</h3><div className="space-y-1.5">{stats.mostCooked.map(r=><div key={r.id} className="flex items-center justify-between text-sm"><span className="font-display">{r.name}</span><span className="text-stone-500">×{r.cookCount}</span></div>)}</div></div>}{stats.topRated.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4 text-emerald-600"/> Loved</h3><div className="space-y-1.5">{stats.topRated.map(r=><div key={r.id} className="text-sm font-display">{r.name}</div>)}</div></div>}</div>}
-      <div className="mb-6"><MealHistorySection mealHistory={mealHistory} recipes={recipeMap}/></div>
+      <div className="mb-6"><MealHistorySection mealHistory={mealHistory} recipes={recipeMap} onEditEntry={onEditMealHistory} onDeleteEntry={onDeleteMealHistory}/></div>
       <div className="bg-white border border-stone-200 rounded-2xl p-5"><div className="flex items-center justify-between mb-3 flex-wrap gap-2"><h3 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-700"/> Recommendations</h3><button onClick={suggest} disabled={loading} className="px-4 py-1.5 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<RefreshCw className="w-3.5 h-3.5"/>}{loading?'Thinking…':suggestions.length?'Refresh':'Suggest recipes'}</button></div>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}{suggestions.length===0&&!loading&&<p className="text-sm text-stone-500">Based on your library, we'll suggest 5 new recipes you'd likely enjoy.</p>}<div className="space-y-3 mt-3">{suggestions.map((s,i)=><div key={i} className="border border-stone-200 rounded-xl p-4"><div className="flex items-start justify-between gap-3 mb-2"><div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{s.cuisine} · {s.totalTime}m</div><h4 className="font-display text-lg leading-tight">{s.name}</h4></div><button onClick={()=>expand(s)} className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs hover:bg-emerald-800 flex items-center gap-1 flex-shrink-0"><Plus className="w-3 h-3"/> Save</button></div><p className="text-sm text-stone-600 mb-2">{s.why}</p><div className="flex flex-wrap gap-1.5">{(s.highlights||[]).map(h=><span key={h} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{h}</span>)}</div></div>)}</div></div>
     </div>
   );
@@ -852,7 +1007,7 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
   function handleShare(){
     const lines=[recipe.name.toUpperCase(),'─'.repeat(Math.min(recipe.name.length,40))];
     if(recipe.cuisine)lines.push(recipe.cuisine);const meta=[];if(recipe.servings)meta.push(`Serves ${recipe.servings}`);if(tt)meta.push(`Total ${tt}m`);if(meta.length)lines.push(meta.join(' · '));
-    lines.push('','INGREDIENTS');for(const ing of recipe.ingredients||[]){lines.push(`  ${ing.quantity?formatQuantity(ing.quantity):''}${ing.unit?' '+ing.unit:''} ${ing.name}`.trim());}
+    lines.push('','INGREDIENTS');for(const ing of recipe.ingredients||[]){lines.push(`  ${ing.quantity?fmtUnit(ing.quantity,ing.unit):''} ${ing.name}`.trim());}
     lines.push('','INSTRUCTIONS');(recipe.instructions||[]).forEach((s,i)=>lines.push(`  ${i+1}. ${s}`));
     if(recipe.notes)lines.push('',`Notes: ${recipe.notes}`);
     const text=lines.join('\n');
@@ -864,7 +1019,7 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
       {recipe.photoUrl&&<div className="w-full h-56 overflow-hidden rounded-xl mb-5 -mt-1"><img src={recipe.photoUrl} alt={recipe.name} className="w-full h-full object-cover"/></div>}
       <div className="flex items-start justify-between mb-4 gap-3">
         <div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{recipe.cuisine}{recipe.course&&recipe.course!=='Main'&&<span className="text-stone-400"> · {recipe.course}</span>}</div><h2 className="font-display text-3xl font-medium leading-tight">{recipe.name}</h2>{recipe.notes&&<p className="text-sm text-stone-600 italic mt-2">{recipe.notes}</p>}</div>
-        <div className="flex gap-1"><button onClick={onDuplicate} title="Duplicate recipe" className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Copy className="w-4 h-4"/></button><button onClick={onEdit} className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Edit2 className="w-4 h-4"/></button><button onClick={onDelete} className="p-2 rounded-full hover:bg-red-50 text-stone-600 hover:text-red-600"><Trash2 className="w-4 h-4"/></button></div>
+        <div className="flex gap-1"><button onClick={onDuplicate} title="Duplicate recipe" className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Copy className="w-4 h-4"/></button><button onClick={onEdit} className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Edit2 className="w-4 h-4"/></button></div>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-stone-600 border-y border-stone-100 py-3 mb-5 items-center">
         {tt>0&&<span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {tt}m total</span>}
@@ -873,7 +1028,7 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
         {lct&&<span className="text-stone-400">Last: {lct}</span>}
       </div>
       <div className="grid grid-cols-1 md:grid-cols-5 gap-6 mb-6">
-        <div className="md:col-span-2"><h3 className="font-display text-lg mb-2">Ingredients</h3><ul className="space-y-1">{(recipe.ingredients||[]).map((ing,i)=>{const bg=ingredientToGrams(ing),sg=bg!=null?bg*scale:null,gl=sg!=null?formatGrams(sg):null;return(<li key={i} className="text-sm text-stone-700 flex"><span className="font-medium text-stone-900 w-20 flex-shrink-0">{formatQuantity(ing.quantity*scale)}{ing.unit&&` ${ing.unit}`}</span><span className="flex-1">{ing.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></li>);})}</ul></div>
+        <div className="md:col-span-2"><h3 className="font-display text-lg mb-2">Ingredients</h3><ul className="space-y-1">{(recipe.ingredients||[]).map((ing,i)=>{const bg=ingredientToGrams(ing),sg=bg!=null?bg*scale:null,gl=sg!=null?formatGrams(sg):null;return(<li key={i} className="text-sm text-stone-700 flex"><span className="font-medium text-stone-900 w-20 flex-shrink-0">{fmtUnit(ing.quantity*scale,ing.unit)}</span><span className="flex-1">{ing.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></li>);})}</ul></div>
         <div className="md:col-span-3"><h3 className="font-display text-lg mb-2">Instructions</h3><ol className="space-y-3">{(recipe.instructions||[]).map((step,i)=><li key={i} className="text-sm text-stone-700 flex gap-3"><span className="font-display text-lg text-orange-700 w-6 flex-shrink-0">{i+1}.</span><span className="leading-relaxed">{step}</span></li>)}</ol></div>
       </div>
       {/* Nutrition section */}
@@ -892,7 +1047,7 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
   );
 }
 
-function EditRecipeModal({recipe,onSave,onCancel}){return(<Modal onClose={onCancel} wide><h2 className="font-display text-2xl mb-4">Edit recipe</h2><RecipeForm initial={recipe} onSave={onSave} onCancel={onCancel}/></Modal>);}
+function EditRecipeModal({recipe,onSave,onCancel,onDelete}){return(<Modal onClose={onCancel} wide><h2 className="font-display text-2xl mb-4">Edit recipe</h2><RecipeForm initial={recipe} onSave={onSave} onCancel={onCancel} onDelete={onDelete}/></Modal>);}
 
 // ============================================================
 // MAIN APP
@@ -927,9 +1082,54 @@ export default function App(){
     const recipe=recipes[id];if(recipe)addMealHistory({date:Date.now(),recipeId:id,label:recipe.name,meal:'dinner',slotType:'recipe'});
   }
   function setRating(id,rating){setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],rating}}}));}
+  function saveRecipeGuide(recipeId,guide,isMealPrep){
+    setState(s=>({...s,recipes:{...s.recipes,[recipeId]:{...s.recipes[recipeId],[isMealPrep?'mealPrepGuide':'prepGuide']:guide}}}));
+  }
+
+  const[weekPrepModal,setWeekPrepModal]=useState(false);
+  const[weekPrepGuide,setWeekPrepGuide]=useState(null);
+  const[weekPrepLoading,setWeekPrepLoading]=useState(false);
+
+  async function generateWeekPrepGuide(){
+    setWeekPrepModal(true);
+    if(weekPrepGuide)return; // already generated
+    setWeekPrepLoading(true);
+    try{
+      const week=state.mealPlan[currentWeek]||{};
+      const recipeIds=new Set();
+      for(const d of DAYS){const dp=week[d.key]||{};for(const m of MEALS){const s=normalizeSlot(dp[m]);if(s?.recipeId&&!s.leftoverFrom)recipeIds.add(s.recipeId);}}
+      const weekRecipes=[...recipeIds].map(id=>recipes[id]).filter(Boolean);
+      if(!weekRecipes.length){setWeekPrepGuide({empty:true});setWeekPrepLoading(false);return;}
+      const recipeSummaries=weekRecipes.map(r=>`${r.name}: ${(r.ingredients||[]).slice(0,6).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ')}`).join('
+');
+      const result=extractJSON(await callAI(
+        `You are a meal prep planner. Given this week's recipes, create a smart prep schedule for Sunday that minimizes effort throughout the week.
+Week's recipes:
+${recipeSummaries}
+Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"string (e.g. Sunday evening, Monday morning)","tasks":[{"recipe":"string","task":"string","duration":"string","storedUntil":"string"}]}]}`,
+        {smart:true}
+      ));
+      setWeekPrepGuide(result);
+    }catch(e){setWeekPrepGuide({error:'Could not generate guide. Try again.'});}
+    finally{setWeekPrepLoading(false);}
+  }
+
   function duplicateRecipe(id){const orig=recipes[id];if(!orig)return;const newId=generateId();const copy={...orig,id:newId,name:`${orig.name} (copy)`,createdAt:Date.now(),cookCount:0,lastCooked:null,rating:null};setState(s=>({...s,recipes:{...s.recipes,[newId]:copy}}));return newId;}
   function saveCookLog(recipeId,logEntry){setState(s=>{const prev=s.cookLog||{};const entries=prev[recipeId]||[];return{...s,cookLog:{...prev,[recipeId]:[...entries,logEntry]}};});}
   function addMealHistory(entry){setState(s=>{const hist=(s.mealHistory||[]);return{...s,mealHistory:[...hist,{...entry,id:generateId()}]};});}
+  function editMealHistory(id,updates){setState(s=>({...s,mealHistory:(s.mealHistory||[]).map(h=>h.id===id?{...h,...updates}:h)}));}
+  function deleteMealHistory(id,recipeId){
+    setState(s=>{
+      const entry=(s.mealHistory||[]).find(h=>h.id===id);
+      // Un-log cook count if this entry was a recipe match
+      let recipes=s.recipes;
+      if(recipeId&&recipes[recipeId]){
+        const r=recipes[recipeId];
+        recipes={...recipes,[recipeId]:{...r,cookCount:Math.max(0,(r.cookCount||1)-1)}};
+      }
+      return{...s,mealHistory:(s.mealHistory||[]).filter(h=>h.id!==id),recipes};
+    });
+  }
   function reorderGroceryCategories(newOrder){setState(s=>({...s,groceryCategoryOrder:newOrder}));}
 
   function handleQuickLog({day,meal,label,recipeId,text,date}){
@@ -996,12 +1196,12 @@ export default function App(){
       {syncStatus==='error'&&<div className="bg-amber-50 border-b border-amber-200 px-5 py-2 text-xs text-amber-800 flex items-center justify-between"><span>⚠️ Sync failed{syncError?`: ${syncError}`:''}.</span><button onClick={manualSync} className="font-medium underline ml-2">Retry</button></div>}
 
       <main className="max-w-6xl mx-auto px-4 sm:px-5 py-6 sm:py-8 pb-24 sm:pb-8">
-        {view==='home'&&<HomeView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} onSelectRecipe={id=>setSelectedRecipeId(id)} onGoToWeek={()=>setView('week')} onQuickLog={()=>setShowQuickLog(true)}/>}
+        {view==='home'&&<HomeView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} onSelectRecipe={id=>setSelectedRecipeId(id)} onGoToWeek={()=>setView('week')} onQuickLog={()=>setShowQuickLog(true)} onSaveRecipeGuide={saveRecipeGuide} onPrepWeek={generateWeekPrepGuide}/>}
         {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
         {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)}/>}
         {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories}/>}
-        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}}/>}
+        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
       </main>
 
@@ -1030,9 +1230,35 @@ export default function App(){
         onSaveCookLog={saveCookLog}
         onSaveRecipe={saveRecipe}
       />}
-      {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)}/>}
+      {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)} onDelete={()=>{if(confirm(`Delete "${editingRecipe.name}"?`)){deleteRecipe(editingRecipe.id);setEditingRecipe(null);setSelectedRecipeId(null);}}}/>}
       {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
       {showQuickLog&&<QuickLogModal onClose={()=>setShowQuickLog(false)} onLog={handleQuickLog} recipes={recipeList}/>}
+      {weekPrepModal&&<Modal onClose={()=>setWeekPrepModal(false)}>
+        <h3 className="font-display text-2xl mb-1">Weekly prep guide</h3>
+        <p className="text-sm text-stone-500 mb-4">{formatWeekRange(currentWeek)}</p>
+        {weekPrepLoading&&<div className="flex items-center gap-2 py-8 justify-center text-stone-500"><Loader2 className="w-5 h-5 animate-spin text-orange-600"/><span>Analyzing your week…</span></div>}
+        {weekPrepGuide?.empty&&<p className="text-sm text-stone-500 py-4">No recipes planned this week yet. Add meals to your week plan first.</p>}
+        {weekPrepGuide?.error&&<p className="text-sm text-red-600 py-4">{weekPrepGuide.error}</p>}
+        {weekPrepGuide&&!weekPrepGuide.empty&&!weekPrepGuide.error&&!weekPrepLoading&&<div className="space-y-4">
+          {weekPrepGuide.intro&&<p className="text-sm text-stone-600 bg-orange-50 border border-orange-100 rounded-xl p-3">{weekPrepGuide.intro}</p>}
+          {(weekPrepGuide.days||[]).map((d,i)=>(
+            <div key={i}>
+              <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2">{d.day}</p>
+              <div className="space-y-2">{(d.tasks||[]).map((t,j)=>(
+                <div key={j} className="bg-white border border-stone-200 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span className="text-xs font-medium text-orange-700">{t.recipe}</span>
+                    <span className="text-xs text-stone-400">{t.duration}</span>
+                  </div>
+                  <p className="text-sm text-stone-700">{t.task}</p>
+                  {t.storedUntil&&<p className="text-xs text-stone-400 mt-1">Keeps until: {t.storedUntil}</p>}
+                </div>
+              ))}</div>
+            </div>
+          ))}
+          <button onClick={()=>{setWeekPrepGuide(null);generateWeekPrepGuide();}} className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-700 pt-2"><RefreshCw className="w-3 h-3"/> Regenerate</button>
+        </div>}
+      </Modal>}
     </div>
   );
 }
