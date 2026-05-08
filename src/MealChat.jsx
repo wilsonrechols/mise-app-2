@@ -407,9 +407,29 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
   const [addToPlanTarget, setAddToPlanTarget] = useState(null); // { recipe, msgId }
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
+  const containerRef = useRef(null);
+  const scrollAreaRef = useRef(null);
 
-  useEffect(() => { if (open && bottomRef.current) bottomRef.current.scrollIntoView({ behavior: 'smooth' }); }, [messages, open]);
-  useEffect(() => { if (open) setTimeout(() => inputRef.current?.focus(), 50); }, [open]);
+  // When chat opens: scroll page so top of chat is visible, then focus input
+  const justOpenedRef = useRef(false);
+  useEffect(() => {
+    if (open) {
+      justOpenedRef.current = true;
+      setTimeout(() => {
+        if (containerRef.current) {
+          containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        inputRef.current?.focus();
+      }, 50);
+    }
+  }, [open]);
+
+  // When messages update: scroll only inside the chat box, never the page
+  useEffect(() => {
+    if (!open || !scrollAreaRef.current) return;
+    if (justOpenedRef.current) { justOpenedRef.current = false; return; }
+    scrollAreaRef.current.scrollTop = scrollAreaRef.current.scrollHeight;
+  }, [messages]);
 
   function addMessage(msg) {
     const id = msg.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -594,12 +614,12 @@ Return ONLY valid JSON:
         </button>
       )}
       {open && (
-        <div className="bg-white border border-stone-200 rounded-2xl mb-4 flex flex-col overflow-hidden" style={{ maxHeight: '70vh' }}>
+        <div ref={containerRef} className="bg-white border border-stone-200 rounded-2xl mb-4 flex flex-col overflow-hidden" style={{ maxHeight: '70vh' }}>
           <div className="flex items-center justify-between px-4 py-3 border-b border-stone-100 flex-shrink-0">
             <div className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-600" /><span className="font-display text-base">Meal assistant</span></div>
             <button onClick={() => setOpen(false)} className="p-1.5 rounded-full hover:bg-stone-100 text-stone-400"><ChevronUp className="w-4 h-4" /></button>
           </div>
-          <div className="flex-1 overflow-y-auto px-4 py-4 min-h-0">
+          <div ref={scrollAreaRef} className="flex-1 overflow-y-auto px-4 py-4 min-h-0">
             {messages.length === 0 && (
               <div className="space-y-2 mb-4">
                 <p className="text-xs text-stone-400 text-center mb-3">Quick starts:</p>
@@ -619,7 +639,6 @@ Return ONLY valid JSON:
                 onSaveDiscoveredRecipe={handleSaveDiscoveredRecipe}
                 onSaveAndPlanDiscoveredRecipe={handleSaveAndPlanDiscoveredRecipe} />
             ))}
-            <div ref={bottomRef} />
           </div>
           <div className="px-3 pb-3 pt-2 border-t border-stone-100 flex-shrink-0">
             <div className="flex items-center gap-2 bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 focus-within:border-stone-400 transition-colors">
