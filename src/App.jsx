@@ -475,7 +475,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
           <button onClick={onGoToWeek} className="text-xs text-stone-500 hover:text-orange-700 flex items-center gap-1">Edit week <ChevronRight className="w-3.5 h-3.5"/></button>
         </div>
         <div className="space-y-3">
-          {todayMeals.map(({meal,slot,recipe,isEatingOut})=>(
+          {todayMeals.map(({meal,slot,recipe,isEatingOut,eoLabel:mealEoLabel})=>(
             <div key={meal} className="flex items-center gap-3">
               <span className="text-xs uppercase tracking-wider text-stone-400 w-16 flex-shrink-0">{MEAL_LABELS[meal]||meal}</span>
               {recipe?(
@@ -491,7 +491,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
               ):isEatingOut?(
                 <div className="flex-1 flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
                   <UtensilsCrossed className="w-3.5 h-3.5 text-amber-600 flex-shrink-0"/>
-                  <span className="text-sm text-amber-800">{eoLabel||slot.label||'Eating out'}</span>
+                  <span className="text-sm text-amber-800">{mealEoLabel||slot.label||'Eating out'}</span>
                 </div>
               ):(
                 <button onClick={onGoToWeek} className="flex-1 text-xs text-stone-400 hover:text-stone-600 bg-stone-50 rounded-xl px-3 py-2.5 text-left border border-dashed border-stone-200 hover:border-stone-400">
