@@ -53,8 +53,8 @@ function formatQuantity(qty){
   return qty.toFixed(2).replace(/\.?0+$/,'');
 }
 function normalizeSlot(slot){if(!slot)return null;if(typeof slot==='string')return{recipeId:slot,multiplier:1,slotType:'recipe'};return{multiplier:1,slotType:'recipe',...slot};}
-function getOriginSlot(weekPlan,slot){const norm=normalizeSlot(slot);if(!norm)return null;if(norm.leftoverFrom){const{day,meal}=norm.leftoverFrom;return normalizeSlot(weekPlan?.[day]?.[meal]);}return norm;}
-function listOriginSlots(weekPlan){const result=[];for(const d of DAYS){const dp=weekPlan?.[d.key]||{};for(const m of MEALS){const n=normalizeSlot(dp[m]);if(n&&n.recipeId&&!n.leftoverFrom)result.push({day:d.key,dayLabel:d.label,meal:m,recipeId:n.recipeId,multiplier:n.multiplier});}}return result;}
+function getOriginSlot(weekPlan,slot,prevWeekPlan){const norm=normalizeSlot(slot);if(!norm)return null;if(norm.leftoverFrom){const{day,meal}=norm.leftoverFrom;const s=weekPlan?.[day]?.[meal]??prevWeekPlan?.[day]?.[meal];return normalizeSlot(s);}return norm;}
+function listOriginSlots(weekPlan,prevWeekPlan){const result=[];for(const plan of[weekPlan,prevWeekPlan].filter(Boolean)){const label=plan===prevWeekPlan?'last week':'this week';for(const d of DAYS){const dp=plan?.[d.key]||{};for(const m of MEALS){const n=normalizeSlot(dp[m]);if(n&&n.recipeId&&!n.leftoverFrom)result.push({day:d.key,dayLabel:`${d.label}${plan===prevWeekPlan?' (last wk)':''}`,meal:m,recipeId:n.recipeId,multiplier:n.multiplier});}}}return result;}
 function todayISO(){return new Date().toISOString().split('T')[0];}
 function daysAgo(n){const d=new Date();d.setDate(d.getDate()-n);return d.toISOString().split('T')[0];}
 function getTodayDayKey(){const dkm=['sun','mon','tue','wed','thu','fri','sat'];return dkm[new Date().getDay()];}
@@ -414,7 +414,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         <div className="flex gap-3">
           <button onClick={()=>setCookingMode(c=>({...c,stepIdx:Math.max(0,c.stepIdx-1)}))} disabled={stepIdx===0} className="flex-1 py-3 rounded-full border border-stone-200 text-sm text-stone-600 disabled:opacity-30 hover:bg-stone-50">← Back</button>
           {isLast?(
-            <button onClick={()=>{const r=cookingMode.recipe;setCookingMode(null);onLogCook&&onLogCook(r.id);setCookReview(r);}} className="flex-1 py-3 rounded-full bg-emerald-700 text-white text-sm hover:bg-emerald-800 flex items-center justify-center gap-2"><Check className="w-4 h-4"/> Done!</button>
+            <button onClick={()=>{const r=cookingMode.recipe;setCookingMode(null);setPrepGuide(null);onLogCook&&onLogCook(r.id);setCookReview(r);}} className="flex-1 py-3 rounded-full bg-emerald-700 text-white text-sm hover:bg-emerald-800 flex items-center justify-center gap-2"><Check className="w-4 h-4"/> Done!</button>
           ):(
             <button onClick={()=>setCookingMode(c=>({...c,stepIdx:c.stepIdx+1}))} className="flex-1 py-3 rounded-full bg-stone-900 text-white text-sm hover:bg-stone-800">Next step →</button>
           )}
@@ -714,6 +714,7 @@ function LibraryView({recipes,onSelect,onAdd,onImport}){
 
 function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,onPickSlot,onClearSlot,onSelectRecipe,onMarkCooked,onSetMultiplier,onCopyLastWeek}){
   const week=mealPlan[currentWeek]||{};
+  const prevWeek=mealPlan[shiftWeek(currentWeek,-1)]||{};
   const dkm=['sun','mon','tue','wed','thu','fri','sat'];
   const[selDayIdx,setSelDayIdx]=useState(()=>{const t=new Date();const todayKey=dkm[t.getDay()];const idx=DAYS.findIndex(d=>d.key===todayKey);return getWeekStart(t)===currentWeek?(idx>=0?idx:0):0;});
   const touchStartX=useRef(null);
@@ -727,7 +728,7 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
         <div className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2 px-1">{d.label}</div>
         <div className="space-y-2">
           {MEALS.map(m=>{
-            const slot=normalizeSlot(dp[m]);const isEatingOut=slot?.slotType==='eating_out';const isLO=!!slot?.leftoverFrom;const origin=isLO?getOriginSlot(week,slot):slot;const rid=origin?.recipeId,recipe=rid?recipes[rid]:null,orphaned=isLO&&!recipe;const sk=`${d.key}_${m}`,ck=isLO&&slot?.leftoverFrom?`${slot.leftoverFrom.day}_${slot.leftoverFrom.meal}`:sk;const isCooked=!!cookedSlots[ck],mul=origin?.multiplier||1;const olabel=isLO&&slot?.leftoverFrom?`${DAYS.find(x=>x.key===slot.leftoverFrom.day)?.label.slice(0,3)} ${slot.leftoverFrom.meal}`:null;
+            const slot=normalizeSlot(dp[m]);const isEatingOut=slot?.slotType==='eating_out';const isLO=!!slot?.leftoverFrom;const origin=isLO?getOriginSlot(week,slot,prevWeek):slot;const rid=origin?.recipeId,recipe=rid?recipes[rid]:null,orphaned=isLO&&!recipe;const sk=`${d.key}_${m}`,ck=isLO&&slot?.leftoverFrom?`${slot.leftoverFrom.day}_${slot.leftoverFrom.meal}`:sk;const isCooked=!!cookedSlots[ck],mul=origin?.multiplier||1;const olabel=isLO&&slot?.leftoverFrom?`${DAYS.find(x=>x.key===slot.leftoverFrom.day)?.label.slice(0,3)} ${slot.leftoverFrom.meal}`:null;
             return(
               <div key={m} className={`border rounded-lg p-2 min-h-[64px] ${isCooked?'border-emerald-200 bg-emerald-50/40':isEatingOut?'border-amber-200 bg-amber-50/30':isLO?'border-stone-100 bg-stone-50/40':'border-stone-100'}`}>
                 <div className="flex items-center justify-between mb-1 gap-1">
@@ -768,11 +769,11 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
   );
 }
 
-function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,onPick,onPickLeftover,onPickEatingOut,onClose}){
+function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,prevWeekPlan,targetSlot,onPick,onPickLeftover,onPickEatingOut,onClose}){
   const[search,setSearch]=useState('');const[mode,setMode]=useState('library');const[eoLabel,setEoLabel]=useState('');const[cuisineFilter,setCuisineFilter]=useState('');
   const availableCuisines=useMemo(()=>[...new Set(recipes.map(r=>r.cuisine).filter(Boolean))].sort(),[recipes]);
   const filtered=recipes.filter(r=>{const matchSearch=!search.trim()||r.name.toLowerCase().includes(search.toLowerCase());const matchCuisine=!cuisineFilter||r.cuisine===cuisineFilter;return matchSearch&&matchCuisine;});
-  const origins=useMemo(()=>listOriginSlots(currentWeekPlan||{}).filter(o=>!(o.day===targetSlot?.day&&o.meal===targetSlot?.meal)),[currentWeekPlan,targetSlot]);
+  const origins=useMemo(()=>listOriginSlots(currentWeekPlan||{},prevWeekPlan||{}).filter(o=>!(o.day===targetSlot?.day&&o.meal===targetSlot?.meal)),[currentWeekPlan,prevWeekPlan,targetSlot]);
   const modes=[{id:'library',label:'From library'},{id:'leftover',label:`Leftovers${origins.length>0?` (${origins.length})`:''}`},{id:'eating_out',label:'Eating out'}];
   return(
     <Modal onClose={onClose}>
@@ -1099,17 +1100,29 @@ function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry,onCle
   );
 }
 
-function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory,onClearAllMealHistory}){
+function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory,onClearAllMealHistory,onClearInsights}){
 
   const stats=useMemo(()=>{const total=recipes.length,ctm=recipes.filter(r=>r.lastCooked&&(Date.now()-r.lastCooked)/86400000<=30).length;const cc={},ic={};let tct=0,tr=0;for(const r of recipes){cc[r.cuisine||'Other']=(cc[r.cuisine||'Other']||0)+1;for(const ing of r.ingredients||[]){const n=normalizeIngredientName(ing.name);ic[n]=(ic[n]||0)+1;}const t=(r.prepTime||0)+(r.cookTime||0);if(t>0){tct+=t;tr++;}}return{total,cookedThisMonth:ctm,cuisineRanked:Object.entries(cc).sort((a,b)=>b[1]-a[1]),ingredientRanked:Object.entries(ic).sort((a,b)=>b[1]-a[1]).slice(0,10),topRated:recipes.filter(r=>r.rating==='up').slice(0,5),mostCooked:[...recipes].sort((a,b)=>(b.cookCount||0)-(a.cookCount||0)).filter(r=>r.cookCount>0).slice(0,5),avgTime:tr?Math.round(tct/tr):0};},[recipes]);
 
 
+  const[confirmClearInsights,setConfirmClearInsights]=useState(false);
   if(recipes.length<3)return(<div className="text-center py-20"><Sparkles className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><h2 className="font-display text-3xl mb-2">Insights coming soon</h2><p className="text-stone-600">Add a few more recipes to see patterns.</p></div>);
   const mx=stats.cuisineRanked[0]?.[1]||1;
   const recipeMap=useMemo(()=>Object.fromEntries(recipes.map(r=>[r.id,r])),[recipes]);
   return(
     <div>
-      <h2 className="font-display text-4xl tracking-tight mb-6">Insights</h2>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <h2 className="font-display text-4xl tracking-tight">Insights</h2>
+        {!confirmClearInsights
+          ?<button onClick={()=>setConfirmClearInsights(true)} className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-red-600"><Trash2 className="w-3.5 h-3.5"/> Reset dashboard</button>
+          :<div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+            <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0"/>
+            <span className="text-xs text-red-800">Clears all cook history, ratings, meal logs. Cannot be undone.</span>
+            <button onClick={()=>{onClearInsights();setConfirmClearInsights(false);}} className="flex-shrink-0 px-3 py-1 rounded-full bg-red-600 text-white text-xs hover:bg-red-700">Yes, reset</button>
+            <button onClick={()=>setConfirmClearInsights(false)} className="flex-shrink-0 px-3 py-1 rounded-full border border-red-200 text-red-700 text-xs hover:bg-red-50">Cancel</button>
+          </div>
+        }
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6"><StatCard label="Recipes" value={stats.total}/><StatCard label="Cooked this month" value={stats.cookedThisMonth}/><StatCard label="Avg total time" value={`${stats.avgTime}m`}/><StatCard label="Top rated" value={stats.topRated.length}/></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Cuisine breakdown</h3><div className="space-y-2">{stats.cuisineRanked.slice(0,6).map(([c,n])=>(<div key={c} className="flex items-center gap-3"><span className="text-sm text-stone-600 w-32 truncate">{c}</span><div className="flex-1 bg-stone-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-orange-700" style={{width:`${(n/mx)*100}%`}}/></div><span className="text-xs text-stone-500 w-6 text-right">{n}</span></div>))}</div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Most-used ingredients</h3><div className="flex flex-wrap gap-2">{stats.ingredientRanked.map(([i,n])=><span key={i} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{i} <span className="text-stone-400">·{n}</span></span>)}</div></div></div>
       {(stats.mostCooked.length>0||stats.topRated.length>0)&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">{stats.mostCooked.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><Flame className="w-4 h-4 text-orange-700"/> Most cooked</h3><div className="space-y-1.5">{stats.mostCooked.map(r=><div key={r.id} className="flex items-center justify-between text-sm"><span className="font-display">{r.name}</span><span className="text-stone-500">×{r.cookCount}</span></div>)}</div></div>}{stats.topRated.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4 text-emerald-600"/> Loved</h3><div className="space-y-1.5">{stats.topRated.map(r=><div key={r.id} className="text-sm font-display">{r.name}</div>)}</div></div>}</div>}
@@ -1216,6 +1229,12 @@ export default function App(){
         rs={...rs,[recipeId]:{...rs[recipeId],cookCount:newCount,lastCooked:newLastCooked}};
       }
       return{...s,mealHistory:newHistory,recipes:rs};
+    });
+  }
+  function clearInsights(){
+    setState(s=>{
+      const clearedRecipes=Object.fromEntries(Object.entries(s.recipes).map(([id,r])=>[id,{...r,cookCount:0,lastCooked:null,rating:null}]));
+      return{...s,recipes:clearedRecipes,mealHistory:[],cookLog:{}};
     });
   }
   function clearAllMealHistory(){
@@ -1400,7 +1419,7 @@ export default function App(){
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
         {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)} onCopyLastWeek={copyLastWeekPlan}/>}
         {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories} onAddToPantry={togglePantry}/>}
-        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory} onClearAllMealHistory={clearAllMealHistory}/>}
+        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory} onClearAllMealHistory={clearAllMealHistory} onClearInsights={clearInsights}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
       </main>
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-stone-50/95 backdrop-blur border-t border-stone-200 z-30" style={{paddingBottom:'env(safe-area-inset-bottom,0)'}}>
@@ -1416,7 +1435,7 @@ export default function App(){
       </nav>
       {selectedRecipe&&!editingRecipe&&<RecipeDetailModal recipe={selectedRecipe} onClose={()=>setSelectedRecipeId(null)} onEdit={()=>setEditingRecipe(selectedRecipe)} onDelete={()=>{if(confirm(`Delete "${selectedRecipe.name}"?`)){deleteRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}} onCook={()=>logCook(selectedRecipe.id)} onRate={rating=>setRating(selectedRecipe.id,rating)} onDuplicate={()=>{duplicateRecipe(selectedRecipe.id);setSelectedRecipeId(null);}} onSaveCookLog={saveCookLog} onSaveRecipe={saveRecipe}/>}
       {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)} onDelete={()=>{if(confirm(`Delete "${editingRecipe.name}"?`)){deleteRecipe(editingRecipe.id);setEditingRecipe(null);setSelectedRecipeId(null);}}}/>}
-      {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
+      {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} prevWeekPlan={state.mealPlan[shiftWeek(planTarget.week,-1)]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
       {showQuickLog&&<QuickLogModal onClose={()=>setShowQuickLog(false)} onLog={handleQuickLog} recipes={recipeList}/>}
     </div>
   );
