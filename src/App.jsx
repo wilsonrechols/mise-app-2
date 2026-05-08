@@ -9,6 +9,7 @@ import {
   PenLine, ChevronUp, ChevronDown, Home, Activity, GripVertical,
   Play, ListOrdered, AlertTriangle
 } from 'lucide-react';
+import { MealChat } from './MealChat';
 
 // ---------- Config ----------
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://mise-sync-311883254950.us-central1.run.app';
@@ -283,7 +284,7 @@ function PrepChecklist({guide,checks,onToggle,onRegenerate}){
   );
 }
 
-function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide,onSaveCookLog,onLogCook}){
+function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide,onSaveCookLog,onLogCook,mealHistory,onApplyWeekPlan,onAddMealHistory,onSaveRecipe,onPlanMeal}){
   const today=getTodayDayKey();
   const weekPlan=mealPlan[currentWeek]||{};
   const todayPlan=weekPlan[today]||{};
@@ -438,6 +439,21 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         <h2 className="font-display text-4xl tracking-tight">Good {new Date().getHours()<12?'morning':new Date().getHours()<17?'afternoon':'evening'}</h2>
       </div>
 
+      {/* AI Meal Planning Chat */}
+      <MealChat
+        recipes={recipes}
+        recipeList={Object.values(recipes)}
+        mealPlan={mealPlan}
+        mealHistory={mealHistory}
+        currentWeek={currentWeek}
+        weekPrepGuide={weekPrepGuide}
+        onApplyWeekPlan={onApplyWeekPlan}
+        onAddMealHistory={onAddMealHistory}
+        onSaveRecipe={onSaveRecipe}
+        onPlanMeal={onPlanMeal}
+        onStartCooking={recipeId=>onSelectRecipe(recipeId)}
+      />
+
       {/* Today's meals */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between mb-4">
@@ -516,15 +532,6 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
           </button>
         </div>
       )}
-
-      {/* Quick log */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
-        <h3 className="font-display text-lg mb-1">Log a meal</h3>
-        <p className="text-sm text-stone-500 mb-3">Ate something not on the plan? Log it quick.</p>
-        <button onClick={onQuickLog} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800">
-          <Zap className="w-4 h-4"/> Quick log
-        </button>
-      </div>
 
       {/* Week dot grid */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5">
@@ -1312,6 +1319,7 @@ export default function App(){
     if(!lastPlan||Object.keys(lastPlan).length===0)return;
     setState(s=>({...s,mealPlan:{...s.mealPlan,[currentWeek]:{...lastPlan}}}));
   }
+  function applyWeekPlanFromAI(weekKey,aiPlan){setState(s=>{const existing=s.mealPlan[weekKey]||{};const merged={...existing};for(const dk of DAYS.map(d=>d.key)){if(!aiPlan[dk])continue;merged[dk]={...(merged[dk]||{})};for(const meal of MEALS){const slot=aiPlan[dk][meal];if(slot===undefined)continue;if(slot===null){delete merged[dk][meal];}else if(typeof slot==='string'){merged[dk][meal]={recipeId:slot,multiplier:1,slotType:'recipe'};}else{merged[dk][meal]={multiplier:1,slotType:'recipe',...slot};}}}return{...s,mealPlan:{...s.mealPlan,[weekKey]:merged}};});}
   function planMeal(week,day,meal,slotValue){setState(s=>{const wp=s.mealPlan[week]||{},slotKey=`${day}_${meal}`;const wc=s.cookedSlots[week]||{},newCooked={...wc};delete newCooked[slotKey];const newWeek={...wp};if(slotValue===null){const dp=newWeek[day]||{},nd={...dp};delete nd[meal];newWeek[day]=nd;for(const d of Object.keys(newWeek)){const dm=newWeek[d];if(!dm)continue;for(const m of Object.keys(dm)){const n=normalizeSlot(dm[m]);if(n?.leftoverFrom?.day===day&&n.leftoverFrom.meal===meal){const u={...newWeek[d]};delete u[m];newWeek[d]=u;delete newCooked[`${d}_${m}`];}}}}else{const ns=typeof slotValue==='string'?{recipeId:slotValue,multiplier:1,slotType:'recipe'}:{multiplier:1,slotType:'recipe',...slotValue};newWeek[day]={...(newWeek[day]||{}),[meal]:ns};}return{...s,mealPlan:{...s.mealPlan,[week]:newWeek},cookedSlots:{...s.cookedSlots,[week]:newCooked}};});}
   function setSlotMultiplier(week,day,meal,multiplier){setState(s=>{const wp=s.mealPlan[week]||{},dp=wp[day]||{},slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom)return s;return{...s,mealPlan:{...s.mealPlan,[week]:{...wp,[day]:{...dp,[meal]:{...slot,multiplier:Math.max(1,Math.min(6,multiplier))}}}}}});}
   function markSlotCooked(week,day,meal,recipeId,currentlyCooked){
@@ -1382,6 +1390,11 @@ export default function App(){
           onRegeneratePrepGuide={handleRegeneratePrepGuide}
           onSaveCookLog={saveCookLog}
           onLogCook={logCook}
+          mealHistory={state.mealHistory}
+          onApplyWeekPlan={applyWeekPlanFromAI}
+          onAddMealHistory={addMealHistory}
+          onSaveRecipe={saveRecipe}
+          onPlanMeal={planMeal}
         />}
         {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
