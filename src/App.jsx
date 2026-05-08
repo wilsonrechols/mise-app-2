@@ -9,7 +9,6 @@ import {
   PenLine, ChevronUp, ChevronDown, Home, Activity, GripVertical,
   Play, ListOrdered, AlertTriangle
 } from 'lucide-react';
-import { MealChat } from './MealChat';
 
 // ---------- Config ----------
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://mise-sync-311883254950.us-central1.run.app';
@@ -284,13 +283,14 @@ function PrepChecklist({guide,checks,onToggle,onRegenerate}){
   );
 }
 
-function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide,mealHistory,onApplyWeekPlan,onAddMealHistory,onSaveRecipe}){
+function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide,onSaveCookLog,onLogCook}){
   const today=getTodayDayKey();
   const weekPlan=mealPlan[currentWeek]||{};
   const todayPlan=weekPlan[today]||{};
   const[cookingMode,setCookingMode]=useState(null);
   const[prepGuide,setPrepGuide]=useState(null);
   const[showIngredients,setShowIngredients]=useState(false);
+  const[cookReview,setCookReview]=useState(null);
 
   const todayMeals=MEALS.map(m=>{
     const slot=normalizeSlot(todayPlan[m]);
@@ -413,11 +413,20 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         <div className="flex gap-3">
           <button onClick={()=>setCookingMode(c=>({...c,stepIdx:Math.max(0,c.stepIdx-1)}))} disabled={stepIdx===0} className="flex-1 py-3 rounded-full border border-stone-200 text-sm text-stone-600 disabled:opacity-30 hover:bg-stone-50">← Back</button>
           {isLast?(
-            <button onClick={()=>setCookingMode(null)} className="flex-1 py-3 rounded-full bg-emerald-700 text-white text-sm hover:bg-emerald-800 flex items-center justify-center gap-2"><Check className="w-4 h-4"/> Done!</button>
+            <button onClick={()=>{const r=cookingMode.recipe;setCookingMode(null);onLogCook&&onLogCook(r.id);setCookReview(r);}} className="flex-1 py-3 rounded-full bg-emerald-700 text-white text-sm hover:bg-emerald-800 flex items-center justify-center gap-2"><Check className="w-4 h-4"/> Done!</button>
           ):(
             <button onClick={()=>setCookingMode(c=>({...c,stepIdx:c.stepIdx+1}))} className="flex-1 py-3 rounded-full bg-stone-900 text-white text-sm hover:bg-stone-800">Next step →</button>
           )}
         </div>
+      </div>
+    );
+  }
+
+  if(cookReview){
+    return(
+      <div className="max-w-lg mx-auto">
+        <p className="text-xs uppercase tracking-wider text-emerald-700 font-medium mb-4 flex items-center gap-2"><Check className="w-3.5 h-3.5" strokeWidth={3}/> Nice work!</p>
+        <CookReviewCard recipe={cookReview} onClose={()=>setCookReview(null)} onSave={(id,log)=>{if(onSaveCookLog)onSaveCookLog(id,log);setCookReview(null);}}/>
       </div>
     );
   }
@@ -507,20 +516,6 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
           </button>
         </div>
       )}
-
-      {/* AI Meal Planning Chat */}
-      <MealChat
-        recipes={recipes}
-        recipeList={Object.values(recipes)}
-        mealPlan={mealPlan}
-        mealHistory={mealHistory}
-        currentWeek={currentWeek}
-        weekPrepGuide={weekPrepGuide}
-        onApplyWeekPlan={onApplyWeekPlan}
-        onAddMealHistory={onAddMealHistory}
-        onSaveRecipe={onSaveRecipe}
-        onStartCooking={recipeId=>onSelectRecipe(recipeId)}
-      />
 
       {/* Quick log */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
@@ -710,7 +705,7 @@ function LibraryView({recipes,onSelect,onAdd,onImport}){
   );
 }
 
-function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,onPickSlot,onClearSlot,onSelectRecipe,onMarkCooked,onSetMultiplier}){
+function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,onPickSlot,onClearSlot,onSelectRecipe,onMarkCooked,onSetMultiplier,onCopyLastWeek}){
   const week=mealPlan[currentWeek]||{};
   const dkm=['sun','mon','tue','wed','thu','fri','sat'];
   const[selDayIdx,setSelDayIdx]=useState(()=>{const t=new Date();const todayKey=dkm[t.getDay()];const idx=DAYS.findIndex(d=>d.key===todayKey);return getWeekStart(t)===currentWeek?(idx>=0?idx:0):0;});
@@ -758,6 +753,7 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
           <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-5 h-5"/></button>
         </div>
         <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100">Today</button>
+        <button onClick={onCopyLastWeek} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100"><Copy className="w-3.5 h-3.5"/> Copy last week</button>
       </div>
       <div className="lg:hidden"><div className="flex gap-1.5 mb-4 overflow-x-auto -mx-4 px-4 pb-1">{DAYS.map((d,i)=>{const dp=week[d.key]||{},filled=MEALS.filter(m=>dp[m]).length,active=selDayIdx===i;return(<button key={d.key} onClick={()=>setSelDayIdx(i)} className={`flex flex-col items-center gap-0.5 px-3.5 py-2 rounded-xl text-xs whitespace-nowrap flex-shrink-0 ${active?'bg-stone-900 text-stone-50':'bg-white border border-stone-200 text-stone-600'}`}><span className="font-medium">{d.label.slice(0,3)}</span><span className="text-[10px] text-stone-400">{filled>0?filled:'–'}</span></button>);})}</div><div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="relative overflow-hidden">{renderDay(sel)}<div className="flex justify-between mt-3 px-1"><button onClick={()=>setSelDayIdx(i=>Math.max(i-1,0))} disabled={selDayIdx===0} className="p-1.5 rounded-full text-stone-400 disabled:opacity-0 hover:bg-stone-100"><ChevronLeft className="w-4 h-4"/></button><span className="text-xs text-stone-400 self-center">swipe to navigate</span><button onClick={()=>setSelDayIdx(i=>Math.min(i+1,DAYS.length-1))} disabled={selDayIdx===DAYS.length-1} className="p-1.5 rounded-full text-stone-400 disabled:opacity-0 hover:bg-stone-100"><ChevronRight className="w-4 h-4"/></button></div></div></div>
       <div className="hidden lg:grid lg:grid-cols-7 gap-3">{DAYS.map(d=><div key={d.key}>{renderDay(d)}</div>)}</div>
@@ -766,15 +762,16 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
 }
 
 function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,onPick,onPickLeftover,onPickEatingOut,onClose}){
-  const[search,setSearch]=useState('');const[mode,setMode]=useState('library');const[eoLabel,setEoLabel]=useState('');
-  const filtered=recipes.filter(r=>!search.trim()||r.name.toLowerCase().includes(search.toLowerCase()));
+  const[search,setSearch]=useState('');const[mode,setMode]=useState('library');const[eoLabel,setEoLabel]=useState('');const[cuisineFilter,setCuisineFilter]=useState('');
+  const availableCuisines=useMemo(()=>[...new Set(recipes.map(r=>r.cuisine).filter(Boolean))].sort(),[recipes]);
+  const filtered=recipes.filter(r=>{const matchSearch=!search.trim()||r.name.toLowerCase().includes(search.toLowerCase());const matchCuisine=!cuisineFilter||r.cuisine===cuisineFilter;return matchSearch&&matchCuisine;});
   const origins=useMemo(()=>listOriginSlots(currentWeekPlan||{}).filter(o=>!(o.day===targetSlot?.day&&o.meal===targetSlot?.meal)),[currentWeekPlan,targetSlot]);
   const modes=[{id:'library',label:'From library'},{id:'leftover',label:`Leftovers${origins.length>0?` (${origins.length})`:''}`},{id:'eating_out',label:'Eating out'}];
   return(
     <Modal onClose={onClose}>
       <h3 className="font-display text-2xl mb-3">{title}</h3>
       <div className="flex gap-1 mb-4 p-1 bg-stone-100 rounded-full overflow-x-auto">{modes.map(md=><button key={md.id} onClick={()=>setMode(md.id)} className={`flex-1 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${mode===md.id?'bg-white text-stone-900 shadow-sm':'text-stone-600'}`}>{md.label}</button>)}</div>
-      {mode==='library'&&<><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search recipes..." className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-4"/><div className="max-h-96 overflow-y-auto space-y-1">{filtered.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No recipes match.</p>}{filtered.map(r=><button key={r.id} onClick={()=>onPick(r.id)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100 flex items-center justify-between"><div><div className="font-display text-base">{r.name}</div><div className="text-xs text-stone-500">{r.cuisine} · {((r.prepTime||0)+(r.cookTime||0))}m{r.nutrition?` · ${Math.round(r.nutrition.calories)} cal`:''}</div></div>{r.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}</button>)}</div></>}
+      {mode==='library'&&<><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search recipes..." className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-2"/>{availableCuisines.length>0&&<div className="flex gap-1.5 mb-3 overflow-x-auto pb-1 -mx-1 px-1">{['',  ...availableCuisines].map(c=><button key={c} onClick={()=>setCuisineFilter(c)} className={`flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${cuisineFilter===c?'bg-stone-900 text-stone-50':'bg-stone-100 text-stone-600 hover:bg-stone-200'}`}>{c||'All'}</button>)}</div>}<div className="max-h-80 overflow-y-auto space-y-1">{filtered.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No recipes match.</p>}{filtered.map(r=><button key={r.id} onClick={()=>onPick(r.id)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100 flex items-center justify-between"><div><div className="font-display text-base">{r.name}</div><div className="text-xs text-stone-500">{r.cuisine} · {((r.prepTime||0)+(r.cookTime||0))}m{r.nutrition?` · ${Math.round(r.nutrition.calories)} cal`:''}</div></div>{r.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}</button>)}</div></>}
       {mode==='leftover'&&<div className="max-h-96 overflow-y-auto space-y-1">{origins.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No cooked meals this week to use as leftovers.</p>}{origins.map(o=>{const r=recipeMap[o.recipeId];if(!r)return null;return(<button key={`${o.day}_${o.meal}`} onClick={()=>onPickLeftover(o.day,o.meal)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100"><div className="text-[10px] uppercase tracking-wider text-stone-500">{o.dayLabel} · {o.meal}</div><div className="font-display text-base">{r.name}</div></button>);})}</div>}
       {mode==='eating_out'&&<div className="space-y-4"><div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl"><UtensilsCrossed className="w-6 h-6 text-amber-600 flex-shrink-0" strokeWidth={1.5}/><div><p className="text-sm font-medium text-amber-900">Eating out</p><p className="text-xs text-amber-700">Mark this slot as a restaurant meal</p></div></div><div><label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Label (optional)</label><input value={eoLabel} onChange={e=>setEoLabel(e.target.value)} placeholder="e.g. Date night, Tacos…" className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500" onKeyDown={e=>e.key==='Enter'&&onPickEatingOut(eoLabel||'Eating out')}/></div><button onClick={()=>onPickEatingOut(eoLabel||'Eating out')} className="w-full py-2.5 rounded-full bg-amber-600 text-white text-sm hover:bg-amber-700 flex items-center justify-center gap-2"><UtensilsCrossed className="w-4 h-4"/> Set as eating out</button></div>}
     </Modal>
@@ -796,14 +793,18 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
   const dragItem=useRef(null);
   const dragOver=useRef(null);
   const orderedCats=useMemo(()=>{const order=categoryOrder||CATEGORIES;const missing=CATEGORIES.filter(c=>!order.includes(c));return[...order,...missing];},[categoryOrder]);
+  const nextWeekKey=useMemo(()=>shiftWeek(currentWeek,1),[currentWeek]);
+  const hasNextWeekMeals=useMemo(()=>{const nw=mealPlan[nextWeekKey]||{};return DAYS.some(d=>MEALS.some(m=>nw[d.key]?.[m]));},[mealPlan,nextWeekKey]);
+  const [includeNextWeek,setIncludeNextWeek]=useState(false);
   const grocery=useMemo(()=>{
-    const week=mealPlan[currentWeek]||{},agg={};
-    for(const day of DAYS){const dp=week[day.key]||{};for(const meal of MEALS){const slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom||slot.slotType==='eating_out')continue;const rid=slot.recipeId;if(!rid)continue;const rec=recipes[rid];if(!rec)continue;const mul=slot.multiplier||1;for(const ing of rec.ingredients||[]){const n=normalizeIngredientName(ing.name);if(pantry.some(p=>normalizeIngredientName(p)===n))continue;const key=`${n}|${(ing.unit||'').toLowerCase()}`;const qty=(ing.quantity||0)*mul;if(agg[key])agg[key].quantity+=qty;else agg[key]={key,name:ing.name,quantity:qty,unit:ing.unit||'',category:ing.category||'other',manual:false};}}}
+    const weeksToAggregate=[currentWeek,...(includeNextWeek?[nextWeekKey]:[])];
+    const agg={};
+    for(const wk of weeksToAggregate){const week=mealPlan[wk]||{};for(const day of DAYS){const dp=week[day.key]||{};for(const meal of MEALS){const slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom||slot.slotType==='eating_out')continue;const rid=slot.recipeId;if(!rid)continue;const rec=recipes[rid];if(!rec)continue;const mul=slot.multiplier||1;for(const ing of rec.ingredients||[]){const n=normalizeIngredientName(ing.name);if(pantry.some(p=>normalizeIngredientName(p)===n))continue;const key=`${n}|${(ing.unit||'').toLowerCase()}`;const qty=(ing.quantity||0)*mul;if(agg[key])agg[key].quantity+=qty;else agg[key]={key,name:ing.name,quantity:qty,unit:ing.unit||'',category:ing.category||'other',manual:false};}}}}
     for(const item of manualItems){const key=`manual:${item.id}`;agg[key]={key,name:item.name,quantity:item.quantity||0,unit:item.unit||'',category:item.category||'other',manual:true,manualId:item.id};}
     const bc={};for(const item of Object.values(agg)){if(!bc[item.category])bc[item.category]=[];bc[item.category].push(item);}
     for(const c of Object.keys(bc))bc[c].sort((a,b)=>a.name.localeCompare(b.name));
     return bc;
-  },[recipes,mealPlan,currentWeek,pantry,manualItems]);
+  },[recipes,mealPlan,currentWeek,nextWeekKey,includeNextWeek,pantry,manualItems]);
   const ti=Object.values(grocery).reduce((s,i)=>s+i.length,0),cc=Object.keys(checks).length;
 
   // Fingerprint of the current ingredient list — if it changes, cache is stale
@@ -897,7 +898,7 @@ The "key" must exactly match the input key for each item (format: "normalized_na
         </div>
       )}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
-        <div><h2 className="font-display text-4xl tracking-tight">Grocery list</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)} · {ti} items · {cc} checked</p></div>
+        <div><h2 className="font-display text-4xl tracking-tight">Grocery list</h2><p className="text-stone-600 text-sm mt-1">{includeNextWeek?`${formatWeekRange(currentWeek)} + next week`:`${formatWeekRange(currentWeek)}`} · {ti} items · {cc} checked</p></div>
         <div className="flex items-center gap-1">
           <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-5 h-5"/></button>
           <p className="font-display text-base font-medium">{formatWeekRange(currentWeek)}</p>
@@ -924,6 +925,17 @@ The "key" must exactly match the input key for each item (format: "normalized_na
         {shopMode&&shopItems&&<button onClick={()=>{setShopItems(null);shopCacheKey.current=null;convertToShopUnits();}} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm bg-white border border-stone-200 text-stone-600 hover:border-stone-400"><RefreshCw className="w-3.5 h-3.5"/> Refresh</button>}
       </div>
 
+      {hasNextWeekMeals&&(
+        <div className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl mb-4 border ${includeNextWeek?'bg-orange-50 border-orange-200':'bg-stone-50 border-stone-200'}`}>
+          <div>
+            <p className="text-sm font-medium text-stone-800">Include next week</p>
+            <p className="text-xs text-stone-500">You have meals planned for {formatWeekRange(nextWeekKey)}</p>
+          </div>
+          <button onClick={()=>{setIncludeNextWeek(v=>!v);setShopItems(null);}} className={`relative w-10 h-6 rounded-full transition-colors flex-shrink-0 ${includeNextWeek?'bg-orange-600':'bg-stone-300'}`}>
+            <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${includeNextWeek?'left-5':'left-1'}`}/>
+          </button>
+        </div>
+      )}
       {shopError&&<p className="text-sm text-red-600 mb-4">{shopError}</p>}
 
       {/* Shopping units mode banner */}
@@ -1081,10 +1093,10 @@ function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry,onCle
 }
 
 function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory,onClearAllMealHistory}){
-  const[suggestions,setSuggestions]=useState([]);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
+
   const stats=useMemo(()=>{const total=recipes.length,ctm=recipes.filter(r=>r.lastCooked&&(Date.now()-r.lastCooked)/86400000<=30).length;const cc={},ic={};let tct=0,tr=0;for(const r of recipes){cc[r.cuisine||'Other']=(cc[r.cuisine||'Other']||0)+1;for(const ing of r.ingredients||[]){const n=normalizeIngredientName(ing.name);ic[n]=(ic[n]||0)+1;}const t=(r.prepTime||0)+(r.cookTime||0);if(t>0){tct+=t;tr++;}}return{total,cookedThisMonth:ctm,cuisineRanked:Object.entries(cc).sort((a,b)=>b[1]-a[1]),ingredientRanked:Object.entries(ic).sort((a,b)=>b[1]-a[1]).slice(0,10),topRated:recipes.filter(r=>r.rating==='up').slice(0,5),mostCooked:[...recipes].sort((a,b)=>(b.cookCount||0)-(a.cookCount||0)).filter(r=>r.cookCount>0).slice(0,5),avgTime:tr?Math.round(tct/tr):0};},[recipes]);
-  async function suggest(){setLoading(true);setError(null);try{setSuggestions(extractJSON(await callAI(`Suggest 5 NEW recipes for: cuisines: ${stats.cuisineRanked.slice(0,3).map(([c,n])=>`${c}(${n})`).join(',')}, ingredients: ${stats.ingredientRanked.slice(0,8).map(([i])=>i).join(',')}, avg time: ${stats.avgTime||30}min, already has: ${recipes.map(r=>r.name).join(',').slice(0,500)}. Return ONLY JSON: [{"name":"string","cuisine":"string","why":"string","totalTime":number,"highlights":["string"]}]`,{smart:true})));}catch(e){setError(e.message);}finally{setLoading(false);}}
-  async function expand(s){try{onSaveRecipe(extractJSON(await callAI(`Generate the full recipe for: "${s.name}" (${s.cuisine}). ${SCHEMA}`,{smart:true})));setSuggestions(p=>p.filter(x=>x.name!==s.name));}catch{alert('Could not expand that recipe.');}}
+
+
   if(recipes.length<3)return(<div className="text-center py-20"><Sparkles className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><h2 className="font-display text-3xl mb-2">Insights coming soon</h2><p className="text-stone-600">Add a few more recipes to see patterns.</p></div>);
   const mx=stats.cuisineRanked[0]?.[1]||1;
   const recipeMap=useMemo(()=>Object.fromEntries(recipes.map(r=>[r.id,r])),[recipes]);
@@ -1095,7 +1107,7 @@ function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistor
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Cuisine breakdown</h3><div className="space-y-2">{stats.cuisineRanked.slice(0,6).map(([c,n])=>(<div key={c} className="flex items-center gap-3"><span className="text-sm text-stone-600 w-32 truncate">{c}</span><div className="flex-1 bg-stone-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-orange-700" style={{width:`${(n/mx)*100}%`}}/></div><span className="text-xs text-stone-500 w-6 text-right">{n}</span></div>))}</div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Most-used ingredients</h3><div className="flex flex-wrap gap-2">{stats.ingredientRanked.map(([i,n])=><span key={i} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{i} <span className="text-stone-400">·{n}</span></span>)}</div></div></div>
       {(stats.mostCooked.length>0||stats.topRated.length>0)&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">{stats.mostCooked.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><Flame className="w-4 h-4 text-orange-700"/> Most cooked</h3><div className="space-y-1.5">{stats.mostCooked.map(r=><div key={r.id} className="flex items-center justify-between text-sm"><span className="font-display">{r.name}</span><span className="text-stone-500">×{r.cookCount}</span></div>)}</div></div>}{stats.topRated.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4 text-emerald-600"/> Loved</h3><div className="space-y-1.5">{stats.topRated.map(r=><div key={r.id} className="text-sm font-display">{r.name}</div>)}</div></div>}</div>}
       <div className="mb-6"><MealHistorySection mealHistory={mealHistory} recipes={recipeMap} onEditEntry={onEditMealHistory} onDeleteEntry={onDeleteMealHistory} onClearAll={onClearAllMealHistory}/></div>
-      <div className="bg-white border border-stone-200 rounded-2xl p-5"><div className="flex items-center justify-between mb-3 flex-wrap gap-2"><h3 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-700"/> Recommendations</h3><button onClick={suggest} disabled={loading} className="px-4 py-1.5 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<RefreshCw className="w-3.5 h-3.5"/>}{loading?'Thinking…':suggestions.length?'Refresh':'Suggest recipes'}</button></div>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}{suggestions.length===0&&!loading&&<p className="text-sm text-stone-500">Based on your library, we'll suggest 5 new recipes you'd likely enjoy.</p>}<div className="space-y-3 mt-3">{suggestions.map((s,i)=><div key={i} className="border border-stone-200 rounded-xl p-4"><div className="flex items-start justify-between gap-3 mb-2"><div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{s.cuisine} · {s.totalTime}m</div><h4 className="font-display text-lg leading-tight">{s.name}</h4></div><button onClick={()=>expand(s)} className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs hover:bg-emerald-800 flex items-center gap-1 flex-shrink-0"><Plus className="w-3 h-3"/> Save</button></div><p className="text-sm text-stone-600 mb-2">{s.why}</p><div className="flex flex-wrap gap-1.5">{(s.highlights||[]).map(h=><span key={h} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{h}</span>)}</div></div>)}</div></div>
+      <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 flex items-start gap-3"><Sparkles className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5"/><div><p className="text-sm font-medium text-orange-900 mb-1">Looking for new recipes?</p><p className="text-sm text-orange-800">Use the meal assistant on the Home tab — tell it to search the internet for a recipe that fits your taste and it will find, parse, and save it for you.</p></div></div>
     </div>
   );
 }
@@ -1294,7 +1306,12 @@ export default function App(){
     if(dateISO){const ws=getWeekStart(new Date(dateISO));const dayKey=DAYS.find(d=>{const t=new Date(dateISO);const dkm=['sun','mon','tue','wed','thu','fri','sat'];return d.key===dkm[t.getDay()];})?.key;if(dayKey&&recipeId)planMeal(ws,dayKey,meal,recipeId);}
   }
 
-  function applyWeekPlanFromAI(weekKey,aiPlan){setState(s=>{const existing=s.mealPlan[weekKey]||{};const merged={...existing};for(const dk of DAYS.map(d=>d.key)){if(!aiPlan[dk])continue;merged[dk]={...(merged[dk]||{})};for(const meal of MEALS){const slot=aiPlan[dk][meal];if(slot===undefined)continue;if(slot===null){delete merged[dk][meal];}else if(typeof slot==='string'){merged[dk][meal]={recipeId:slot,multiplier:1,slotType:'recipe'};}else{merged[dk][meal]={multiplier:1,slotType:'recipe',...slot};}}}return{...s,mealPlan:{...s.mealPlan,[weekKey]:merged}};});}
+  function copyLastWeekPlan(){
+    const lastWeek=shiftWeek(currentWeek,-1);
+    const lastPlan=state.mealPlan[lastWeek];
+    if(!lastPlan||Object.keys(lastPlan).length===0)return;
+    setState(s=>({...s,mealPlan:{...s.mealPlan,[currentWeek]:{...lastPlan}}}));
+  }
   function planMeal(week,day,meal,slotValue){setState(s=>{const wp=s.mealPlan[week]||{},slotKey=`${day}_${meal}`;const wc=s.cookedSlots[week]||{},newCooked={...wc};delete newCooked[slotKey];const newWeek={...wp};if(slotValue===null){const dp=newWeek[day]||{},nd={...dp};delete nd[meal];newWeek[day]=nd;for(const d of Object.keys(newWeek)){const dm=newWeek[d];if(!dm)continue;for(const m of Object.keys(dm)){const n=normalizeSlot(dm[m]);if(n?.leftoverFrom?.day===day&&n.leftoverFrom.meal===meal){const u={...newWeek[d]};delete u[m];newWeek[d]=u;delete newCooked[`${d}_${m}`];}}}}else{const ns=typeof slotValue==='string'?{recipeId:slotValue,multiplier:1,slotType:'recipe'}:{multiplier:1,slotType:'recipe',...slotValue};newWeek[day]={...(newWeek[day]||{}),[meal]:ns};}return{...s,mealPlan:{...s.mealPlan,[week]:newWeek},cookedSlots:{...s.cookedSlots,[week]:newCooked}};});}
   function setSlotMultiplier(week,day,meal,multiplier){setState(s=>{const wp=s.mealPlan[week]||{},dp=wp[day]||{},slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom)return s;return{...s,mealPlan:{...s.mealPlan,[week]:{...wp,[day]:{...dp,[meal]:{...slot,multiplier:Math.max(1,Math.min(6,multiplier))}}}}}});}
   function markSlotCooked(week,day,meal,recipeId,currentlyCooked){
@@ -1363,14 +1380,12 @@ export default function App(){
           onPrepWeek={generateWeekPrepGuide}
           onTogglePrepCheck={togglePrepCheck}
           onRegeneratePrepGuide={handleRegeneratePrepGuide}
-          mealHistory={state.mealHistory}
-          onApplyWeekPlan={applyWeekPlanFromAI}
-          onAddMealHistory={addMealHistory}
-          onSaveRecipe={saveRecipe}
+          onSaveCookLog={saveCookLog}
+          onLogCook={logCook}
         />}
         {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
-        {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)}/>}
+        {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)} onCopyLastWeek={copyLastWeekPlan}/>}
         {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories} onAddToPantry={togglePantry}/>}
         {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory} onClearAllMealHistory={clearAllMealHistory}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
