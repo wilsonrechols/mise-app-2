@@ -7,7 +7,7 @@ import {
   Flame, Cloud, CloudOff, Download, Copy, UtensilsCrossed,
   Star, MessageSquare, Share2, Zap, History, Image as ImageIcon,
   PenLine, ChevronUp, ChevronDown, Home, Activity, GripVertical,
-  Play, ListOrdered
+  Play, ListOrdered, AlertTriangle
 } from 'lucide-react';
 
 // ---------- Config ----------
@@ -32,6 +32,8 @@ const DEFAULT_STATE = {
   cookLog:{},
   mealHistory:[],
   groceryCategoryOrder: [...CATEGORIES],
+  weekPrepGuide: null,    // {intro, tasks:[{id,recipe,task,duration,storedUntil}]}
+  weekPrepChecks: {},     // {taskId: true}
 };
 
 // ---------- Utilities ----------
@@ -70,7 +72,6 @@ function fmtUnit(qty,unit){return`${formatQuantity(qty)}${abbreviateUnit(unit)?'
 function extractJSON(text){let clean=text.replace(/```json\s*/gi,'').replace(/```/g,'').trim();const am=clean.match(/\[[\s\S]*\]/),om=clean.match(/\{[\s\S]*\}/);if(am&&(!om||am.index<om.index))clean=am[0];else if(om)clean=om[0];return JSON.parse(clean);}
 
 // ---------- API ----------
-// FIX: correct model strings
 async function callAI(prompt,options={}){
   const model=options.smart?'claude-sonnet-4-6':'claude-haiku-4-5-20251001';
   const body={model,max_tokens:2000,messages:[{role:'user',content:prompt}]};
@@ -220,7 +221,69 @@ function NutritionSection({recipe,onSave}){
   );
 }
 
-function HomeView({recipes,mealPlan,currentWeek,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek}){
+// ---------- PrepChecklist (Home inline card) ----------
+function PrepChecklist({guide,checks,onToggle,onRegenerate}){
+  const[confirmRegen,setConfirmRegen]=useState(false);
+  if(!guide||guide.empty||guide.error)return null;
+  const tasks=guide.tasks||[];
+  const doneCount=tasks.filter(t=>checks[t.id]).length;
+
+  if(confirmRegen){
+    return(
+      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0"/>
+          <h3 className="font-display text-lg text-amber-900">Regenerate prep guide?</h3>
+        </div>
+        <p className="text-sm text-amber-800 mb-4">This will clear all checklist progress and regenerate based on the next 7 days of your meal plan. Any items you've already checked off will be lost.</p>
+        <div className="flex gap-2">
+          <button onClick={()=>{setConfirmRegen(false);onRegenerate();}} className="px-4 py-2 rounded-full bg-amber-600 text-white text-sm hover:bg-amber-700">Yes, regenerate</button>
+          <button onClick={()=>setConfirmRegen(false)} className="px-4 py-2 rounded-full border border-amber-200 text-amber-800 text-sm hover:bg-amber-100">Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="font-display text-lg">Prep checklist</h3>
+        <button onClick={()=>setConfirmRegen(true)} className="flex items-center gap-1 text-xs text-stone-400 hover:text-stone-700">
+          <RefreshCw className="w-3 h-3"/> Regenerate
+        </button>
+      </div>
+      <p className="text-xs text-stone-500 mb-4">{doneCount} of {tasks.length} done</p>
+      {guide.intro&&<p className="text-xs text-stone-500 italic mb-3">{guide.intro}</p>}
+      <div className="space-y-2">
+        {tasks.map(task=>{
+          const done=!!checks[task.id];
+          return(
+            <button key={task.id} onClick={()=>onToggle(task.id)} className={`w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-colors ${done?'border-emerald-200 bg-emerald-50/40':'border-stone-100 bg-stone-50 hover:border-stone-200'}`}>
+              <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${done?'bg-emerald-600 border-emerald-600':'border-stone-300'}`}>
+                {done&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2 mb-0.5">
+                  <span className={`text-xs font-medium ${done?'text-emerald-700':'text-orange-700'}`}>{task.recipe}</span>
+                  {task.duration&&<span className="text-[10px] text-stone-400 flex-shrink-0">{task.duration}</span>}
+                </div>
+                <p className={`text-sm leading-snug ${done?'line-through text-stone-400':'text-stone-700'}`}>{task.task}</p>
+                {task.storedUntil&&!done&&<p className="text-[10px] text-stone-400 mt-0.5">Keeps: {task.storedUntil}</p>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      {doneCount===tasks.length&&tasks.length>0&&(
+        <div className="mt-3 flex items-center gap-2 text-sm text-emerald-700 font-medium">
+          <Check className="w-4 h-4" strokeWidth={3}/> All prep done — you're ready for the week!
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide}){
   const today=getTodayDayKey();
   const weekPlan=mealPlan[currentWeek]||{};
   const todayPlan=weekPlan[today]||{};
@@ -364,6 +427,8 @@ function HomeView({recipes,mealPlan,currentWeek,onSelectRecipe,onGoToWeek,onQuic
         <p className="text-sm text-stone-500 mb-1">{todayDate}</p>
         <h2 className="font-display text-4xl tracking-tight">Good {new Date().getHours()<12?'morning':new Date().getHours()<17?'afternoon':'evening'}</h2>
       </div>
+
+      {/* Today's meals */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-display text-lg">Today's meals</h3>
@@ -397,6 +462,8 @@ function HomeView({recipes,mealPlan,currentWeek,onSelectRecipe,onGoToWeek,onQuic
           ))}
         </div>
       </div>
+
+      {/* Cook tonight CTA */}
       {nextUncooked&&(
         <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4">
           <p className="text-xs uppercase tracking-wider text-orange-600 font-medium mb-1">Cook tonight</p>
@@ -418,13 +485,29 @@ function HomeView({recipes,mealPlan,currentWeek,onSelectRecipe,onGoToWeek,onQuic
           </div>
         </div>
       )}
-      <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
-        <h3 className="font-display text-lg mb-1">Prep this week</h3>
-        <p className="text-sm text-stone-500 mb-3">See what can be made ahead across all this week's recipes.</p>
-        <button onClick={onPrepWeek} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800">
-          <ListOrdered className="w-4 h-4"/> Weekly prep guide
-        </button>
-      </div>
+
+      {/* Persistent prep checklist (shows when guide exists) */}
+      {weekPrepGuide&&!weekPrepGuide.empty&&!weekPrepGuide.error&&(
+        <PrepChecklist
+          guide={weekPrepGuide}
+          checks={weekPrepChecks||{}}
+          onToggle={onTogglePrepCheck}
+          onRegenerate={onRegeneratePrepGuide}
+        />
+      )}
+
+      {/* Weekly prep guide CTA (shows when no guide yet) */}
+      {(!weekPrepGuide||weekPrepGuide.empty||weekPrepGuide.error)&&(
+        <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
+          <h3 className="font-display text-lg mb-1">Prep this week</h3>
+          <p className="text-sm text-stone-500 mb-3">See what can be made ahead across the next 7 days.</p>
+          <button onClick={onPrepWeek} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800">
+            <ListOrdered className="w-4 h-4"/> Generate prep guide
+          </button>
+        </div>
+      )}
+
+      {/* Quick log */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
         <h3 className="font-display text-lg mb-1">Log a meal</h3>
         <p className="text-sm text-stone-500 mb-3">Ate something not on the plan? Log it quick.</p>
@@ -432,6 +515,8 @@ function HomeView({recipes,mealPlan,currentWeek,onSelectRecipe,onGoToWeek,onQuic
           <Zap className="w-4 h-4"/> Quick log
         </button>
       </div>
+
+      {/* Week dot grid */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5">
         <h3 className="font-display text-lg mb-3">This week</h3>
         <div className="grid grid-cols-7 gap-1">
@@ -767,18 +852,29 @@ function QuickLogModal({onClose,onLog,recipes}){
   );
 }
 
-function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry}){
+function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry,onClearAll}){
   const cutoff=Date.now()-30*24*60*60*1000;
   const recent=(mealHistory||[]).filter(h=>h.date>cutoff).sort((a,b)=>b.date-a.date);
   const[editingId,setEditingId]=useState(null);
   const[editForm,setEditForm]=useState({});
+  const[confirmClear,setConfirmClear]=useState(false);
   function startEdit(h){setEditingId(h.id);setEditForm({label:h.label||h.text||'',meal:h.meal||'dinner'});}
   function saveEdit(){onEditEntry(editingId,editForm);setEditingId(null);}
   if(recent.length===0)return(<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-2 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Meal history</h3><p className="text-sm text-stone-500">No meals logged yet. Use quick log or mark meals as cooked.</p></div>);
   const byDate={};for(const h of recent){const d=new Date(h.date).toLocaleDateString('en-US',{month:'short',day:'numeric',weekday:'short'});if(!byDate[d])byDate[d]=[];byDate[d].push(h);}
   return(
     <div className="bg-white border border-stone-200 rounded-2xl p-5">
-      <h3 className="font-display text-lg mb-4 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Last 30 days</h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-display text-lg flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Last 30 days</h3>
+        {!confirmClear
+          ?<button onClick={()=>setConfirmClear(true)} className="text-xs text-stone-400 hover:text-red-600 flex items-center gap-1"><Trash2 className="w-3 h-3"/> Clear all</button>
+          :<div className="flex items-center gap-2">
+            <span className="text-xs text-stone-500">Reset cook history too?</span>
+            <button onClick={()=>{onClearAll();setConfirmClear(false);}} className="text-xs px-2.5 py-1 rounded-full bg-red-600 text-white hover:bg-red-700">Yes, clear</button>
+            <button onClick={()=>setConfirmClear(false)} className="text-xs px-2.5 py-1 rounded-full border border-stone-200 text-stone-600 hover:bg-stone-50">Cancel</button>
+          </div>
+        }
+      </div>
       <div className="space-y-4">{Object.entries(byDate).slice(0,14).map(([date,entries])=>(
         <div key={date}>
           <p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-1.5">{date}</p>
@@ -813,7 +909,7 @@ function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry}){
   );
 }
 
-function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory}){
+function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory,onClearAllMealHistory}){
   const[suggestions,setSuggestions]=useState([]);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
   const stats=useMemo(()=>{const total=recipes.length,ctm=recipes.filter(r=>r.lastCooked&&(Date.now()-r.lastCooked)/86400000<=30).length;const cc={},ic={};let tct=0,tr=0;for(const r of recipes){cc[r.cuisine||'Other']=(cc[r.cuisine||'Other']||0)+1;for(const ing of r.ingredients||[]){const n=normalizeIngredientName(ing.name);ic[n]=(ic[n]||0)+1;}const t=(r.prepTime||0)+(r.cookTime||0);if(t>0){tct+=t;tr++;}}return{total,cookedThisMonth:ctm,cuisineRanked:Object.entries(cc).sort((a,b)=>b[1]-a[1]),ingredientRanked:Object.entries(ic).sort((a,b)=>b[1]-a[1]).slice(0,10),topRated:recipes.filter(r=>r.rating==='up').slice(0,5),mostCooked:[...recipes].sort((a,b)=>(b.cookCount||0)-(a.cookCount||0)).filter(r=>r.cookCount>0).slice(0,5),avgTime:tr?Math.round(tct/tr):0};},[recipes]);
   async function suggest(){setLoading(true);setError(null);try{setSuggestions(extractJSON(await callAI(`Suggest 5 NEW recipes for: cuisines: ${stats.cuisineRanked.slice(0,3).map(([c,n])=>`${c}(${n})`).join(',')}, ingredients: ${stats.ingredientRanked.slice(0,8).map(([i])=>i).join(',')}, avg time: ${stats.avgTime||30}min, already has: ${recipes.map(r=>r.name).join(',').slice(0,500)}. Return ONLY JSON: [{"name":"string","cuisine":"string","why":"string","totalTime":number,"highlights":["string"]}]`,{smart:true})));}catch(e){setError(e.message);}finally{setLoading(false);}}
@@ -827,7 +923,7 @@ function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistor
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6"><StatCard label="Recipes" value={stats.total}/><StatCard label="Cooked this month" value={stats.cookedThisMonth}/><StatCard label="Avg total time" value={`${stats.avgTime}m`}/><StatCard label="Top rated" value={stats.topRated.length}/></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Cuisine breakdown</h3><div className="space-y-2">{stats.cuisineRanked.slice(0,6).map(([c,n])=>(<div key={c} className="flex items-center gap-3"><span className="text-sm text-stone-600 w-32 truncate">{c}</span><div className="flex-1 bg-stone-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-orange-700" style={{width:`${(n/mx)*100}%`}}/></div><span className="text-xs text-stone-500 w-6 text-right">{n}</span></div>))}</div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Most-used ingredients</h3><div className="flex flex-wrap gap-2">{stats.ingredientRanked.map(([i,n])=><span key={i} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{i} <span className="text-stone-400">·{n}</span></span>)}</div></div></div>
       {(stats.mostCooked.length>0||stats.topRated.length>0)&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">{stats.mostCooked.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><Flame className="w-4 h-4 text-orange-700"/> Most cooked</h3><div className="space-y-1.5">{stats.mostCooked.map(r=><div key={r.id} className="flex items-center justify-between text-sm"><span className="font-display">{r.name}</span><span className="text-stone-500">×{r.cookCount}</span></div>)}</div></div>}{stats.topRated.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4 text-emerald-600"/> Loved</h3><div className="space-y-1.5">{stats.topRated.map(r=><div key={r.id} className="text-sm font-display">{r.name}</div>)}</div></div>}</div>}
-      <div className="mb-6"><MealHistorySection mealHistory={mealHistory} recipes={recipeMap} onEditEntry={onEditMealHistory} onDeleteEntry={onDeleteMealHistory}/></div>
+      <div className="mb-6"><MealHistorySection mealHistory={mealHistory} recipes={recipeMap} onEditEntry={onEditMealHistory} onDeleteEntry={onDeleteMealHistory} onClearAll={onClearAllMealHistory}/></div>
       <div className="bg-white border border-stone-200 rounded-2xl p-5"><div className="flex items-center justify-between mb-3 flex-wrap gap-2"><h3 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-700"/> Recommendations</h3><button onClick={suggest} disabled={loading} className="px-4 py-1.5 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<RefreshCw className="w-3.5 h-3.5"/>}{loading?'Thinking…':suggestions.length?'Refresh':'Suggest recipes'}</button></div>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}{suggestions.length===0&&!loading&&<p className="text-sm text-stone-500">Based on your library, we'll suggest 5 new recipes you'd likely enjoy.</p>}<div className="space-y-3 mt-3">{suggestions.map((s,i)=><div key={i} className="border border-stone-200 rounded-xl p-4"><div className="flex items-start justify-between gap-3 mb-2"><div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{s.cuisine} · {s.totalTime}m</div><h4 className="font-display text-lg leading-tight">{s.name}</h4></div><button onClick={()=>expand(s)} className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs hover:bg-emerald-800 flex items-center gap-1 flex-shrink-0"><Plus className="w-3 h-3"/> Save</button></div><p className="text-sm text-stone-600 mb-2">{s.why}</p><div className="flex flex-wrap gap-1.5">{(s.highlights||[]).map(h=><span key={h} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{h}</span>)}</div></div>)}</div></div>
     </div>
   );
@@ -899,9 +995,6 @@ export default function App(){
   const[planTarget,setPlanTarget]=useState(null);
   const[currentWeek,setCurrentWeek]=useState(getWeekStart());
   const[showQuickLog,setShowQuickLog]=useState(false);
-  const[weekPrepModal,setWeekPrepModal]=useState(false);
-  const[weekPrepGuide,setWeekPrepGuide]=useState(null);
-  const[weekPrepLoading,setWeekPrepLoading]=useState(false);
 
   const recipes=state.recipes;
   const recipeList=useMemo(()=>Object.values(recipes),[recipes]);
@@ -923,31 +1016,104 @@ export default function App(){
   function editMealHistory(id,updates){setState(s=>({...s,mealHistory:(s.mealHistory||[]).map(h=>h.id===id?{...h,...updates}:h)}));}
   function deleteMealHistory(id,recipeId){
     setState(s=>{
+      const newHistory=(s.mealHistory||[]).filter(h=>h.id!==id);
       let rs=s.recipes;
-      if(recipeId&&rs[recipeId])rs={...rs,[recipeId]:{...rs[recipeId],cookCount:Math.max(0,(rs[recipeId].cookCount||1)-1)}};
-      return{...s,mealHistory:(s.mealHistory||[]).filter(h=>h.id!==id),recipes:rs};
+      // Recompute cookCount + lastCooked for affected recipe from remaining history
+      if(recipeId&&rs[recipeId]){
+        const remaining=newHistory.filter(h=>h.recipeId===recipeId);
+        const newCount=remaining.length;
+        const newLastCooked=remaining.length>0?Math.max(...remaining.map(h=>h.date)):null;
+        rs={...rs,[recipeId]:{...rs[recipeId],cookCount:newCount,lastCooked:newLastCooked}};
+      }
+      return{...s,mealHistory:newHistory,recipes:rs};
+    });
+  }
+  function clearAllMealHistory(){
+    setState(s=>{
+      // Reset cookCount and lastCooked on every recipe that has history
+      const affectedIds=new Set((s.mealHistory||[]).map(h=>h.recipeId).filter(Boolean));
+      let rs=s.recipes;
+      for(const id of affectedIds){
+        if(rs[id])rs={...rs,[id]:{...rs[id],cookCount:0,lastCooked:null}};
+      }
+      return{...s,mealHistory:[],recipes:rs};
     });
   }
   function reorderGroceryCategories(newOrder){setState(s=>({...s,groceryCategoryOrder:newOrder}));}
 
+  // ---------- Prep guide state functions ----------
+  function togglePrepCheck(taskId){
+    setState(s=>{
+      const checks={...(s.weekPrepChecks||{})};
+      if(checks[taskId])delete checks[taskId];
+      else checks[taskId]=true;
+      return{...s,weekPrepChecks:checks};
+    });
+  }
+  function saveWeekPrepGuide(guide){
+    setState(s=>({...s,weekPrepGuide:guide,weekPrepChecks:{}}));
+  }
+  function clearWeekPrepGuide(){
+    setState(s=>({...s,weekPrepGuide:null,weekPrepChecks:{}}));
+  }
+
+  // ---------- Generate weekly prep guide (7-day lookahead, no day assumption) ----------
   async function generateWeekPrepGuide(){
-    setWeekPrepModal(true);
-    if(weekPrepGuide)return;
-    setWeekPrepLoading(true);
+    // Collect unique recipe IDs from today + next 7 days across current + next week
+    const recipeIds=new Set();
+    const thisWeekPlan=state.mealPlan[currentWeek]||{};
+    const nextWeek=shiftWeek(currentWeek,1);
+    const nextWeekPlan=state.mealPlan[nextWeek]||{};
+
+    // Figure out which DAYS keys fall within the next 7 days from today
+    const todayKey=getTodayDayKey();
+    const dkOrder=['mon','tue','wed','thu','fri','sat','sun'];
+    const todayIdx=dkOrder.indexOf(todayKey);
+
+    // Scan from today through 7 days — may span into next week
+    for(let i=0;i<7;i++){
+      const idx=(todayIdx+i)%7;
+      const dk=dkOrder[idx];
+      // First 7-todayIdx days come from currentWeek, rest from next week
+      const plan=i<(7-todayIdx)?thisWeekPlan:nextWeekPlan;
+      const dp=plan[dk]||{};
+      for(const m of MEALS){
+        const s=normalizeSlot(dp[m]);
+        if(s?.recipeId&&!s.leftoverFrom)recipeIds.add(s.recipeId);
+      }
+    }
+
+    const weekRecipes=[...recipeIds].map(id=>recipes[id]).filter(Boolean);
+    if(!weekRecipes.length){
+      saveWeekPrepGuide({empty:true});
+      return;
+    }
+
+    const recipeSummaries=weekRecipes.map(r=>{
+      const ings=(r.ingredients||[]).slice(0,6).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ');
+      const steps=(r.instructions||[]).slice(0,3).join(' ');
+      return`${r.name}: ingredients: ${ings}. Steps: ${steps}`;
+    }).join('\n\n');
+
     try{
-      const week=state.mealPlan[currentWeek]||{};
-      const recipeIds=new Set();
-      for(const d of DAYS){const dp=week[d.key]||{};for(const m of MEALS){const s=normalizeSlot(dp[m]);if(s?.recipeId&&!s.leftoverFrom)recipeIds.add(s.recipeId);}}
-      const weekRecipes=[...recipeIds].map(id=>recipes[id]).filter(Boolean);
-      if(!weekRecipes.length){setWeekPrepGuide({empty:true});setWeekPrepLoading(false);return;}
-      const recipeSummaries=weekRecipes.map(r=>`${r.name}: ${(r.ingredients||[]).slice(0,6).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ')}`).join('\n');
       const result=extractJSON(await callAI(
-        `You are a meal prep planner. Given this week's recipes, create a smart prep schedule for Sunday that minimizes effort throughout the week.\nWeek's recipes:\n${recipeSummaries}\nReturn ONLY JSON: {"intro":"string","days":[{"day":"string","tasks":[{"recipe":"string","task":"string","duration":"string","storedUntil":"string"}]}]}`,
+        `You are a meal prep planner. Given the recipes planned for the next 7 days, identify prep tasks that can be done ahead of time to make cooking easier throughout the week. Do NOT assign prep to a specific day — just describe what to prep, how far ahead it can be done, and how to store it.\n\nRecipes:\n${recipeSummaries}\n\nReturn ONLY JSON:\n{"intro":"string","tasks":[{"id":"string","recipe":"string","task":"string","duration":"string","storedUntil":"string","howFarAhead":"string"}]}\n\nMake each task "id" a unique short slug like "task-1", "task-2" etc.`,
         {smart:true}
       ));
-      setWeekPrepGuide(result);
-    }catch(e){setWeekPrepGuide({error:'Could not generate guide. Try again.'});}
-    finally{setWeekPrepLoading(false);}
+      // Ensure all tasks have unique IDs
+      if(result.tasks){
+        result.tasks=result.tasks.map((t,i)=>({...t,id:t.id||`task-${i+1}`}));
+      }
+      saveWeekPrepGuide(result);
+    }catch(e){
+      saveWeekPrepGuide({error:'Could not generate guide. Try again.'});
+    }
+  }
+
+  // Regenerate: clear then re-generate
+  function handleRegeneratePrepGuide(){
+    clearWeekPrepGuide();
+    generateWeekPrepGuide();
   }
 
   function handleQuickLog({day,meal,label,recipeId,text,date}){
@@ -1012,12 +1178,25 @@ export default function App(){
       </header>
       {syncStatus==='error'&&<div className="bg-amber-50 border-b border-amber-200 px-5 py-2 text-xs text-amber-800 flex items-center justify-between"><span>⚠️ Sync failed{syncError?`: ${syncError}`:''}.</span><button onClick={manualSync} className="font-medium underline ml-2">Retry</button></div>}
       <main className="max-w-6xl mx-auto px-4 sm:px-5 py-6 sm:py-8 pb-24 sm:pb-8">
-        {view==='home'&&<HomeView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} onSelectRecipe={id=>setSelectedRecipeId(id)} onGoToWeek={()=>setView('week')} onQuickLog={()=>setShowQuickLog(true)} onSaveRecipeGuide={saveRecipeGuide} onPrepWeek={generateWeekPrepGuide}/>}
+        {view==='home'&&<HomeView
+          recipes={recipes}
+          mealPlan={state.mealPlan}
+          currentWeek={currentWeek}
+          weekPrepGuide={state.weekPrepGuide}
+          weekPrepChecks={state.weekPrepChecks||{}}
+          onSelectRecipe={id=>setSelectedRecipeId(id)}
+          onGoToWeek={()=>setView('week')}
+          onQuickLog={()=>setShowQuickLog(true)}
+          onSaveRecipeGuide={saveRecipeGuide}
+          onPrepWeek={generateWeekPrepGuide}
+          onTogglePrepCheck={togglePrepCheck}
+          onRegeneratePrepGuide={handleRegeneratePrepGuide}
+        />}
         {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
         {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)}/>}
         {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories}/>}
-        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory}/>}
+        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory} onClearAllMealHistory={clearAllMealHistory}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
       </main>
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-stone-50/95 backdrop-blur border-t border-stone-200 z-30" style={{paddingBottom:'env(safe-area-inset-bottom,0)'}}>
@@ -1035,29 +1214,6 @@ export default function App(){
       {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)} onDelete={()=>{if(confirm(`Delete "${editingRecipe.name}"?`)){deleteRecipe(editingRecipe.id);setEditingRecipe(null);setSelectedRecipeId(null);}}}/>}
       {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
       {showQuickLog&&<QuickLogModal onClose={()=>setShowQuickLog(false)} onLog={handleQuickLog} recipes={recipeList}/>}
-      {weekPrepModal&&<Modal onClose={()=>setWeekPrepModal(false)}>
-        <h3 className="font-display text-2xl mb-1">Weekly prep guide</h3>
-        <p className="text-sm text-stone-500 mb-4">{formatWeekRange(currentWeek)}</p>
-        {weekPrepLoading&&<div className="flex items-center gap-2 py-8 justify-center text-stone-500"><Loader2 className="w-5 h-5 animate-spin text-orange-600"/><span>Analyzing your week…</span></div>}
-        {weekPrepGuide?.empty&&<p className="text-sm text-stone-500 py-4">No recipes planned this week yet.</p>}
-        {weekPrepGuide?.error&&<p className="text-sm text-red-600 py-4">{weekPrepGuide.error}</p>}
-        {weekPrepGuide&&!weekPrepGuide.empty&&!weekPrepGuide.error&&!weekPrepLoading&&<div className="space-y-4">
-          {weekPrepGuide.intro&&<p className="text-sm text-stone-600 bg-orange-50 border border-orange-100 rounded-xl p-3">{weekPrepGuide.intro}</p>}
-          {(weekPrepGuide.days||[]).map((d,i)=>(
-            <div key={i}>
-              <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2">{d.day}</p>
-              <div className="space-y-2">{(d.tasks||[]).map((t,j)=>(
-                <div key={j} className="bg-white border border-stone-200 rounded-xl p-3">
-                  <div className="flex items-center justify-between mb-0.5"><span className="text-xs font-medium text-orange-700">{t.recipe}</span><span className="text-xs text-stone-400">{t.duration}</span></div>
-                  <p className="text-sm text-stone-700">{t.task}</p>
-                  {t.storedUntil&&<p className="text-xs text-stone-400 mt-1">Keeps until: {t.storedUntil}</p>}
-                </div>
-              ))}</div>
-            </div>
-          ))}
-          <button onClick={()=>{setWeekPrepGuide(null);generateWeekPrepGuide();}} className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-700 pt-2"><RefreshCw className="w-3 h-3"/> Regenerate</button>
-        </div>}
-      </Modal>}
     </div>
   );
 }
