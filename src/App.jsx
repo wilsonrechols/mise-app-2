@@ -62,7 +62,10 @@ async function callAI(prompt,options={}){
   if(options.tools)body.tools=options.tools;
   if(options.imageData)body.messages=[{role:'user',content:[{type:'image',source:{type:'base64',media_type:options.imageType,data:options.imageData}},{type:'text',text:prompt}]}];
   const r=await fetch(`${SERVER_URL}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  if(!r.ok)throw new Error(`AI error ${r.status}`);
+  if(!r.ok){
+    const errData=await r.json().catch(()=>({}));
+    throw new Error(`AI error ${r.status}: ${errData.error?.message||errData.error||JSON.stringify(errData)}`);
+  }
   const d=await r.json();
   return d.content.filter(b=>b.type==='text').map(b=>b.text).join('\n');
 }
