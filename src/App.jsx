@@ -303,7 +303,49 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
   useEffect(()=>{const t=new Date();setSelDay(getWeekStart(t)===currentWeek?dkm[t.getDay()]:'mon');},[currentWeek]);
   function renderDay(d){
     const dp=week[d.key]||{};
-    return(<div className="bg-white border border-stone-200 rounded-2xl p-3"><div className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2 px-1">{d.label}</div><div className="space-y-2">{MEALS.map(m=>{const slot=normalizeSlot(dp[m]),isLO=!!slot?.leftoverFrom,origin=isLO?getOriginSlot(week,slot):slot;const rid=origin?.recipeId,recipe=rid?recipes[rid]:null,orphaned=isLO&&!recipe;const sk=`${d.key}_${m}`,ck=isLO&&slot?.leftoverFrom?`${slot.leftoverFrom.day}_${slot.leftoverFrom.meal}`:sk;const isCooked=!!cookedSlots[ck],mul=origin?.multiplier||1;const olabel=isLO&&slot?.leftoverFrom?`${DAYS.find(x=>x.key===slot.leftoverFrom.day)?.label.slice(0,3)} ${slot.leftoverFrom.meal}`:null;return(<div key={m} className={`border rounded-lg p-2 min-h-[64px] ${isCooked?'border-emerald-200 bg-emerald-50/40':isLO?'border-stone-100 bg-stone-50/40':'border-stone-100'}`}><div className="flex items-center justify-between mb-1 gap-1"><span className="text-[10px] uppercase tracking-wider text-stone-400">{m}</span><div className="flex items-center gap-1">{isLO&&!orphaned&&<span className="text-[9px] uppercase text-stone-500 font-medium px-1.5 py-0.5 bg-stone-100 rounded-full">leftover</span>}{!isLO&&mul>1&&<span className="text-[10px] font-bold text-orange-700 px-1.5 py-0.5 bg-orange-50 rounded-full">×{mul}</span>}{isCooked&&<Check className="w-3 h-3 text-emerald-700" strokeWidth={3}/>}</div></div>{recipe||orphaned?(<div className="flex items-start justify-between gap-1"><button onClick={()=>recipe&&onSelectRecipe(rid)} disabled={orphaned} className={`font-display text-sm text-left leading-tight hover:text-orange-700 flex-1 ${isCooked?'text-stone-500 line-through':''} ${isLO?'italic text-stone-700':''} ${orphaned?'text-stone-400':''}`}>{orphaned?'(origin deleted)':recipe.name}{olabel&&!orphaned&&<span className="block text-[10px] not-italic text-stone-400 mt-0.5">from {olabel}</span>}</button><div className="flex flex-col gap-1.5 flex-shrink-0">{!isLO&&<><button onClick={()=>onSetMultiplier(d.key,m,mul>=4?1:mul+1)} className="text-[10px] text-stone-500 hover:text-orange-700 font-bold">×{mul}</button><button onClick={()=>onMarkCooked(d.key,m,rid,isCooked)} className={isCooked?'text-emerald-700':'text-stone-300 hover:text-emerald-700'}><ChefHat className="w-3.5 h-3.5"/></button></>}<button onClick={()=>onClearSlot(d.key,m)} className="text-stone-300 hover:text-red-500"><X className="w-3 h-3"/></button></div></div>):<button onClick={()=>onPickSlot(d.key,m)} className="w-full text-xs text-stone-400 hover:text-stone-700 py-2 rounded-md border border-dashed border-stone-200 hover:border-stone-400">+ Add</button>}</div>);}}</div></div>);
+    return(
+      <div className="bg-white border border-stone-200 rounded-2xl p-3">
+        <div className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2 px-1">{d.label}</div>
+        <div className="space-y-2">
+          {MEALS.map(m=>{
+            const slot=normalizeSlot(dp[m]),isLO=!!slot?.leftoverFrom,origin=isLO?getOriginSlot(week,slot):slot;
+            const rid=origin?.recipeId,recipe=rid?recipes[rid]:null,orphaned=isLO&&!recipe;
+            const sk=`${d.key}_${m}`,ck=isLO&&slot?.leftoverFrom?`${slot.leftoverFrom.day}_${slot.leftoverFrom.meal}`:sk;
+            const isCooked=!!cookedSlots[ck],mul=origin?.multiplier||1;
+            const olabel=isLO&&slot?.leftoverFrom?`${DAYS.find(x=>x.key===slot.leftoverFrom.day)?.label.slice(0,3)} ${slot.leftoverFrom.meal}`:null;
+            return(
+              <div key={m} className={`border rounded-lg p-2 min-h-[64px] ${isCooked?'border-emerald-200 bg-emerald-50/40':isLO?'border-stone-100 bg-stone-50/40':'border-stone-100'}`}>
+                <div className="flex items-center justify-between mb-1 gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-stone-400">{m}</span>
+                  <div className="flex items-center gap-1">
+                    {isLO&&!orphaned&&<span className="text-[9px] uppercase text-stone-500 font-medium px-1.5 py-0.5 bg-stone-100 rounded-full">leftover</span>}
+                    {!isLO&&mul>1&&<span className="text-[10px] font-bold text-orange-700 px-1.5 py-0.5 bg-orange-50 rounded-full">×{mul}</span>}
+                    {isCooked&&<Check className="w-3 h-3 text-emerald-700" strokeWidth={3}/>}
+                  </div>
+                </div>
+                {recipe||orphaned?(
+                  <div className="flex items-start justify-between gap-1">
+                    <button onClick={()=>recipe&&onSelectRecipe(rid)} disabled={orphaned} className={`font-display text-sm text-left leading-tight hover:text-orange-700 flex-1 ${isCooked?'text-stone-500 line-through':''} ${isLO?'italic text-stone-700':''} ${orphaned?'text-stone-400':''}`}>
+                      {orphaned?'(origin deleted)':recipe.name}
+                      {olabel&&!orphaned&&<span className="block text-[10px] not-italic text-stone-400 mt-0.5">from {olabel}</span>}
+                    </button>
+                    <div className="flex flex-col gap-1.5 flex-shrink-0">
+                      {!isLO&&<>
+                        <button onClick={()=>onSetMultiplier(d.key,m,mul>=4?1:mul+1)} className="text-[10px] text-stone-500 hover:text-orange-700 font-bold">×{mul}</button>
+                        <button onClick={()=>onMarkCooked(d.key,m,rid,isCooked)} className={isCooked?'text-emerald-700':'text-stone-300 hover:text-emerald-700'}><ChefHat className="w-3.5 h-3.5"/></button>
+                      </>}
+                      <button onClick={()=>onClearSlot(d.key,m)} className="text-stone-300 hover:text-red-500"><X className="w-3 h-3"/></button>
+                    </div>
+                  </div>
+                ):(
+                  <button onClick={()=>onPickSlot(d.key,m)} className="w-full text-xs text-stone-400 hover:text-stone-700 py-2 rounded-md border border-dashed border-stone-200 hover:border-stone-400">+ Add</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   }
   const sel=DAYS.find(d=>d.key===selDay)||DAYS[0];
   return(<div><div className="flex items-center justify-between mb-6 flex-wrap gap-3"><div><h2 className="font-display text-4xl tracking-tight">This week</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)}</p></div><div className="flex items-center gap-1"><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button><button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button></div></div><div className="lg:hidden"><div className="flex gap-1.5 mb-4 overflow-x-auto -mx-4 px-4 pb-1">{DAYS.map(d=>{const dp=week[d.key]||{},filled=MEALS.filter(m=>dp[m]).length,active=selDay===d.key;return(<button key={d.key} onClick={()=>setSelDay(d.key)} className={`flex flex-col items-center gap-0.5 px-3.5 py-2 rounded-xl text-xs whitespace-nowrap flex-shrink-0 ${active?'bg-stone-900 text-stone-50':'bg-white border border-stone-200 text-stone-600'}`}><span className="font-medium">{d.label.slice(0,3)}</span><span className="text-[10px] text-stone-400">{filled>0?filled:'–'}</span></button>);})}</div>{renderDay(sel)}</div><div className="hidden lg:grid lg:grid-cols-7 gap-3">{DAYS.map(d=><div key={d.key}>{renderDay(d)}</div>)}</div></div>);
