@@ -766,16 +766,18 @@ function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,o
   );
 }
 
-function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,manualItems,onToggleCheck,onAddManualItem,onRemoveManualItem,categoryOrder,onReorderCategories}){
+function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,manualItems,onToggleCheck,onAddManualItem,onRemoveManualItem,categoryOrder,onReorderCategories,onAddToPantry}){
   const[showAdd,setShowAdd]=useState(false);
   const[newItem,setNewItem]=useState({name:'',quantity:1,unit:'',category:'other'});
   const[shareStatus,setShareStatus]=useState(null);
   const[editingOrder,setEditingOrder]=useState(false);
-  const[shopMode,setShopMode]=useState(false);          // toggle: recipe amounts vs shopping units
-  const[shopItems,setShopItems]=useState(null);         // cached AI-converted list: [{name,amount,category,key}]
+  const[shopMode,setShopMode]=useState(false);
+  const[shopItems,setShopItems]=useState(null);
   const[shopLoading,setShopLoading]=useState(false);
   const[shopError,setShopError]=useState(null);
-  const shopCacheKey=useRef(null);                      // track which ingredient fingerprint the cache is for
+  const[pantryToast,setPantryToast]=useState(null);  // name of item just added to pantry
+  const pantryToastTimer=useRef(null);
+  const shopCacheKey=useRef(null);
   const dragItem=useRef(null);
   const dragOver=useRef(null);
   const orderedCats=useMemo(()=>{const order=categoryOrder||CATEGORIES;const missing=CATEGORIES.filter(c=>!order.includes(c));return[...order,...missing];},[categoryOrder]);
@@ -864,9 +866,21 @@ The "key" must exactly match the input key for each item (format: "normalized_na
   async function shareList(){const text=buildShareText();if(navigator.share){try{await navigator.share({title:'Mise grocery list',text});setShareStatus('shared');}catch(e){if(e.name!=='AbortError')fallbackCopy(text);}}else{fallbackCopy(text);}setTimeout(()=>setShareStatus(null),2500);}
   function fallbackCopy(text){navigator.clipboard.writeText(text).then(()=>setShareStatus('copied')).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);setShareStatus('copied');});}
   function handleAdd(){if(!newItem.name.trim())return;onAddManualItem({name:newItem.name.trim(),quantity:newItem.quantity||1,unit:newItem.unit.trim(),category:newItem.category});setNewItem({name:'',quantity:1,unit:'',category:'other'});setShopItems(null);setShowAdd(false);}
+  function handleAddToPantry(name){
+    onAddToPantry(name);
+    if(pantryToastTimer.current)clearTimeout(pantryToastTimer.current);
+    setPantryToast(name);
+    pantryToastTimer.current=setTimeout(()=>setPantryToast(null),2500);
+  }
 
   return(
     <div>
+      {pantryToast&&(
+        <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 bg-stone-900 text-stone-50 rounded-full text-sm shadow-lg pointer-events-none whitespace-nowrap">
+          <Package className="w-3.5 h-3.5 text-orange-400 flex-shrink-0"/>
+          <span><span className="font-medium capitalize">{pantryToast}</span> added to pantry</span>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div><h2 className="font-display text-4xl tracking-tight">Grocery list</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)} · {ti} items · {cc} checked</p></div>
         <div className="flex items-center gap-1">
@@ -942,6 +956,7 @@ The "key" must exactly match the input key for each item (format: "normalized_na
                           {item.note&&!checked&&<p className="text-[10px] text-stone-400 mt-0.5">{item.note}</p>}
                         </div>
                       </button>
+                      {!item.manual&&<button onClick={()=>handleAddToPantry(item.name)} title="Add to pantry staples" className="p-1.5 text-stone-300 hover:text-orange-600 mt-0.5 flex-shrink-0"><Package className="w-3.5 h-3.5"/></button>}
                       {item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600 mt-0.5"><X className="w-3.5 h-3.5"/></button>}
                     </div>
                   );
@@ -952,7 +967,7 @@ The "key" must exactly match the input key for each item (format: "normalized_na
         </div>
       ):(
         // Recipe amounts view (default)
-        !shopMode&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{orderedCats.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>
+        !shopMode&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{orderedCats.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{!item.manual&&<button onClick={()=>handleAddToPantry(item.name)} title="Add to pantry staples" className="p-1.5 text-stone-300 hover:text-orange-600 flex-shrink-0"><Package className="w-3.5 h-3.5"/></button>}{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>
       )}
     </div>
   );
@@ -1336,7 +1351,7 @@ export default function App(){
         {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
         {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)}/>}
-        {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories}/>}
+        {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories} onAddToPantry={togglePantry}/>}
         {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory} onClearAllMealHistory={clearAllMealHistory}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
       </main>
