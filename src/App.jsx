@@ -61,13 +61,13 @@ async function callAI(prompt,options={}){
   const body={model:'claude-sonnet-4-20250514',max_tokens:2000,messages:[{role:'user',content:prompt}]};
   if(options.tools)body.tools=options.tools;
   if(options.imageData)body.messages=[{role:'user',content:[{type:'image',source:{type:'base64',media_type:options.imageType,data:options.imageData}},{type:'text',text:prompt}]}];
-  const r=await fetch(`${SERVER_URL}/ai`,{method:'POST',headers:{'Content-Type':'application/json','X-Secret-Key':SECRET_KEY},body:JSON.stringify(body)});
+  const r=await fetch(`${SERVER_URL}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   if(!r.ok)throw new Error(`AI error ${r.status}`);
   const d=await r.json();
   return d.content.filter(b=>b.type==='text').map(b=>b.text).join('\n');
 }
-async function syncRead(){const r=await fetch(`${SERVER_URL}/data`,{headers:{'X-Secret-Key':SECRET_KEY}});if(r.status===404)return null;if(!r.ok)throw new Error(`Sync read error ${r.status}`);return r.json();}
-async function syncWrite(data){const r=await fetch(`${SERVER_URL}/data`,{method:'PUT',headers:{'Content-Type':'application/json','X-Secret-Key':SECRET_KEY},body:JSON.stringify(data)});if(!r.ok)throw new Error(`Sync write error ${r.status}`);}
+async function syncRead(){const r=await fetch(`${SERVER_URL}/data`);if(r.status===404)return null;if(!r.ok)throw new Error(`Sync read error ${r.status}`);return r.json();}
+async function syncWrite(data){const r=await fetch(`${SERVER_URL}/data`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(!r.ok)throw new Error(`Sync write error ${r.status}`);}
 
 // ---------- Export/Import/Share ----------
 function exportRecipes(recipes){const data=JSON.stringify({version:1,exportedAt:new Date().toISOString(),recipes},null,2);const blob=new Blob([data],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`mise-recipes-${new Date().toISOString().split('T')[0]}.json`;a.click();URL.revokeObjectURL(url);}
