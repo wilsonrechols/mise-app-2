@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Sparkles, Send, X, ChevronDown, ChevronUp, Check, Loader2, ChevronRight } from 'lucide-react';
+import { Sparkles, Send, X, ChevronDown, ChevronUp, Check, Loader2, ChevronRight, Globe, BookOpen, Plus, Clock, Users } from 'lucide-react';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://mise-sync-311883254950.us-central1.run.app';
+
+const SCHEMA = `Return ONLY valid JSON, no markdown fences. Schema:
+{"name":"string","servings":number,"prepTime":number,"cookTime":number,"cuisine":"American|Italian|Mexican|Asian|Mediterranean|Indian|French|Middle Eastern|BBQ|Comfort|Other","course":"Main|Side|Dessert|Breakfast|Snack|Drink|Sauce|Other","tags":["string"],"ingredients":[{"name":"string","quantity":number,"unit":"string","category":"produce|dairy|meat|seafood|pantry|spices|frozen|bakery|beverages|other","grams":number}],"instructions":["string"],"notes":"string"}`;
 
 async function callAI(prompt, options = {}) {
   const model = options.smart ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
@@ -10,6 +13,12 @@ async function callAI(prompt, options = {}) {
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`AI error ${r.status}: ${e.error?.message || JSON.stringify(e)}`); }
   const d = await r.json();
   return d.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+}
+
+async function fetchURL(url) {
+  const r = await fetch(`${SERVER_URL}/fetch-url`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
+  if (!r.ok) throw new Error('Could not fetch that URL');
+  return r.json();
 }
 
 function extractJSON(text) {
@@ -25,6 +34,7 @@ const MEALS_LIST = ['breakfast','lunch','dinner'];
 
 function detectIntent(text) {
   const t = text.toLowerCase();
+  if (/\b(search|find|look up|discover|suggest.*new|new.*recipe|internet|web|online)\b/i.test(t)) return 'search';
   if (/\b(plan|schedule|what.*week|week.*meal|meal.*plan|\d+\s*days?\s*(of\s*)?(meal|food))/i.test(t)) return 'plan';
   if (/\b(prep|prepare|make ahead|before (dinner|lunch|breakfast)|what can (i|we) (make|cook|prep))/i.test(t)) return 'prep';
   if (/\b(log|ate|had|just (ate|had)|for (breakfast|lunch|dinner) (i|we))/i.test(t)) return 'log';
@@ -96,12 +106,127 @@ function resolveSlot(slot, recipes) {
 }
 
 function planToRows(plan, recipes) {
-  return DAYS_KEYS.map(dk => {
+  const todayIdx = DAYS_KEYS.indexOf(getTodayDayKeyLocal());
+  const orderedDays = Array.from({ length: 7 }, (_, i) => DAYS_KEYS[(todayIdx + i) % 7]);
+  return orderedDays.map(dk => {
     const dp = (plan && plan[dk]) || {};
     return { dayKey: dk, dayLabel: DAYS_LABEL[dk], breakfast: resolveSlot(dp.breakfast, recipes), lunch: resolveSlot(dp.lunch, recipes), dinner: resolveSlot(dp.dinner, recipes) };
   });
 }
 
+// --- RecipeDiscoveryCard ---
+// Shown inline in chat after a web search finds a recipe
+function RecipeDiscoveryCard({ recipe, onSave, onSaveAndPlan, saving }) {
+  const [expanded, setExpanded] = useState(false);
+  const tt = (recipe.prepTime || 0) + (recipe.cookTime || 0);
+  return (
+    <div className="mt-3 bg-white border border-stone-200 rounded-2xl overflow-hidden">
+      <div className="px-4 pt-4 pb-3 border-b border-stone-100 flex items-start gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <Globe className="w-3 h-3 text-stone-400 flex-shrink-0" />
+            <span className="text-[10px] uppercase tracking-wider text-stone-400 font-medium">Found on the web</span>
+          </div>
+          <h4 className="font-display text-lg leading-tight">{recipe.name}</h4>
+          <div className="flex items-center gap-3 mt-1.5 text-xs text-stone-500">
+            {tt > 0 && <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{tt}m</span>}
+            {recipe.servings > 0 && <span className="flex items-center gap-1"><Users className="w-3 h-3" />{recipe.servings} servings</span>}
+            {recipe.cuisine && <span className="text-orange-700">{recipe.cuisine}</span>}
+          </div>
+        </div>
+      </div>
+
+      <div className="px-4 py-3">
+        <button onClick={() => setExpanded(v => !v)} className="flex items-center gap-1.5 text-xs text-stone-500 hover:text-stone-800 mb-3">
+          <BookOpen className="w-3 h-3" />
+          {expanded ? 'Hide details' : `Preview (${(recipe.ingredients||[]).length} ingredients, ${(recipe.instructions||[]).length} steps)`}
+          {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        </button>
+
+        {expanded && (
+          <div className="space-y-3 mb-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-stone-400 font-medium mb-1.5">Ingredients</p>
+              <div className="space-y-0.5">
+                {(recipe.ingredients || []).slice(0, 8).map((ing, i) => (
+                  <div key={i} className="text-xs text-stone-600 flex gap-2">
+                    <span className="font-medium text-stone-800 w-16 flex-shrink-0">{ing.quantity ? `${ing.quantity} ${ing.unit || ''}`.trim() : ''}</span>
+                    <span>{ing.name}</span>
+                  </div>
+                ))}
+                {(recipe.ingredients || []).length > 8 && <p className="text-xs text-stone-400">+{recipe.ingredients.length - 8} more...</p>}
+              </div>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-stone-400 font-medium mb-1.5">Instructions</p>
+              <ol className="space-y-1">
+                {(recipe.instructions || []).slice(0, 3).map((step, i) => (
+                  <li key={i} className="text-xs text-stone-600 flex gap-2">
+                    <span className="font-medium text-orange-700 flex-shrink-0">{i + 1}.</span>
+                    <span className="leading-relaxed">{step.slice(0, 120)}{step.length > 120 ? '...' : ''}</span>
+                  </li>
+                ))}
+                {(recipe.instructions || []).length > 3 && <li className="text-xs text-stone-400">+{recipe.instructions.length - 3} more steps...</li>}
+              </ol>
+            </div>
+          </div>
+        )}
+
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={onSave} disabled={saving}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-stone-900 text-stone-50 text-xs hover:bg-stone-800 disabled:opacity-50">
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+            Save to library
+          </button>
+          <button onClick={onSaveAndPlan} disabled={saving}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800 disabled:opacity-50">
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+            Save + add to plan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- AddToPlanModal ---
+// After saving a searched recipe, pick which day + meal to add it to
+function AddToPlanModal({ recipe, onConfirm, onClose }) {
+  const todayIdx = DAYS_KEYS.indexOf(getTodayDayKeyLocal());
+  const next7 = Array.from({ length: 7 }, (_, i) => DAYS_KEYS[(todayIdx + i) % 7]);
+  const [day, setDay] = useState(next7[0]);
+  const [meal, setMeal] = useState('dinner');
+  return (
+    <div className="fixed inset-0 bg-stone-900/40 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-stone-50 rounded-2xl p-4 w-full max-w-sm" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h4 className="font-display text-lg">Add to plan</h4>
+          <button onClick={onClose} className="p-1.5 rounded-full hover:bg-stone-200 text-stone-500"><X className="w-4 h-4" /></button>
+        </div>
+        <p className="text-sm text-stone-600 mb-4">Adding <strong>{recipe.name}</strong> to your week plan.</p>
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Day</label>
+            <select value={day} onChange={e => setDay(e.target.value)} className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none">
+              {next7.map(dk => <option key={dk} value={dk}>{DAYS_LABEL[dk]}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Meal</label>
+            <select value={meal} onChange={e => setMeal(e.target.value)} className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none">
+              {MEALS_LIST.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+            </select>
+          </div>
+        </div>
+        <button onClick={() => onConfirm(day, meal)} className="w-full py-2.5 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800">
+          Add to {DAYS_LABEL[day]} {meal}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- MealPlanPreview ---
 function MealPlanPreview({ draftPlan, recipes, onSwap, onApply, applying }) {
   const rows = planToRows(draftPlan, recipes);
   const todayKey = getTodayDayKeyLocal();
@@ -149,6 +274,7 @@ function MealPlanPreview({ draftPlan, recipes, onSwap, onApply, applying }) {
   );
 }
 
+// --- SlotSwapModal ---
 function SlotSwapModal({ day, meal, recipeList, onSave, onClose }) {
   const [search, setSearch] = useState('');
   const [mode, setMode] = useState('recipe');
@@ -193,8 +319,11 @@ function SlotSwapModal({ day, meal, recipeList, onSave, onClose }) {
   );
 }
 
-function ChatMessage({ msg, recipes, recipeList, onApplyPlan, onStartCooking, applying, swapTarget, onSwapOpen, onSwapClose, onSwapSave }) {
+// --- ChatMessage ---
+function ChatMessage({ msg, recipes, recipeList, onApplyPlan, onStartCooking, applying, swapTarget, onSwapOpen, onSwapClose, onSwapSave, onSaveDiscoveredRecipe, onSaveAndPlanDiscoveredRecipe }) {
   const isUser = msg.role === 'user';
+  const [saving, setSaving] = useState(false);
+
   if (isUser) {
     return (
       <div className="flex justify-end mb-3">
@@ -202,6 +331,7 @@ function ChatMessage({ msg, recipes, recipeList, onApplyPlan, onStartCooking, ap
       </div>
     );
   }
+
   return (
     <div className="flex gap-2.5 mb-4 items-start">
       <div className="w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -209,7 +339,10 @@ function ChatMessage({ msg, recipes, recipeList, onApplyPlan, onStartCooking, ap
       </div>
       <div className="flex-1 min-w-0">
         {msg.loading ? (
-          <div className="flex items-center gap-2 py-1 text-stone-400"><Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" /><span className="text-sm">Thinking...</span></div>
+          <div className="flex items-center gap-2 py-1 text-stone-400">
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600" />
+            <span className="text-sm">{msg.loadingText || 'Thinking...'}</span>
+          </div>
         ) : (
           <>
             {msg.text && <div className="text-sm text-stone-800 leading-relaxed whitespace-pre-wrap">{msg.text}</div>}
@@ -220,6 +353,20 @@ function ChatMessage({ msg, recipes, recipeList, onApplyPlan, onStartCooking, ap
                 onApply={() => onApplyPlan(msg.id, msg.draftPlan)}
                 applying={applying === msg.id}
               />
+            )}
+            {msg.discoveredRecipe && (
+              <RecipeDiscoveryCard
+                recipe={msg.discoveredRecipe}
+                saving={saving}
+                onSave={async () => { setSaving(true); try { await onSaveDiscoveredRecipe(msg.id, msg.discoveredRecipe); } finally { setSaving(false); } }}
+                onSaveAndPlan={async () => { setSaving(true); try { await onSaveAndPlanDiscoveredRecipe(msg.id, msg.discoveredRecipe); } finally { setSaving(false); } }}
+              />
+            )}
+            {msg.savedRecipeName && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
+                <Check className="w-3.5 h-3.5 flex-shrink-0" strokeWidth={3} />
+                {msg.savedRecipeName}
+              </div>
             )}
             {msg.saveAsRecipePrompt && (
               <div className="mt-3 flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
@@ -248,7 +395,8 @@ function ChatMessage({ msg, recipes, recipeList, onApplyPlan, onStartCooking, ap
   );
 }
 
-export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWeek, weekPrepGuide, onApplyWeekPlan, onAddMealHistory, onSaveRecipe, onStartCooking }) {
+// --- MealChat (main export) ---
+export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWeek, weekPrepGuide, onApplyWeekPlan, onAddMealHistory, onSaveRecipe, onPlanMeal, onStartCooking }) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
@@ -256,6 +404,7 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
   const [applying, setApplying] = useState(null);
   const [swapTarget, setSwapTarget] = useState(null);
   const [draftPlans, setDraftPlans] = useState({});
+  const [addToPlanTarget, setAddToPlanTarget] = useState(null); // { recipe, msgId }
   const bottomRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -278,19 +427,70 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
     setInput('');
     setLoading(true);
     addMessage({ role: 'user', content: trimmed });
-    const replyId = addMessage({ role: 'assistant', loading: true });
+    const replyId = addMessage({ role: 'assistant', loading: true, loadingText: 'Thinking...' });
     const intent = detectIntent(trimmed);
     const context = buildContextBlock(recipes, mealPlan, mealHistory, currentWeek, weekPrepGuide);
 
     try {
-      if (intent === 'plan') {
-        const prompt = `You are a helpful meal planning assistant for the app "Mise".\n\n${context}\n\nUSER REQUEST: "${trimmed}"\n\nGenerate a full 7-day meal plan (Monday-Sunday) using recipes from the library above.\nPrefer variety - avoid repeating the same recipe more than twice.\nYou may include "eating out" slots (1-2 per week max unless the user asks for more).\nRespond ONLY with valid JSON in this exact shape - no markdown, no extra text:\n{\n  "message": "brief friendly intro (1-2 sentences)",\n  "plan": {\n    "mon": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },\n    "tue": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },\n    "wed": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },\n    "thu": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },\n    "fri": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },\n    "sat": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },\n    "sun": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" }\n  }\n}\nFor eating-out slots use: { "slotType": "eating_out", "label": "Restaurant night" }\nFor empty/skipped slots use: null\nUse recipe IDs exactly as shown in the library (the id: values after each recipe name).\nIf the library has fewer than 21 recipes, reuse some or leave nulls.`;
+      // --- SEARCH intent: find a new recipe from the web ---
+      if (intent === 'search') {
+        updateMessage(replyId, { loadingText: 'Searching for recipes...' });
+
+        // Step 1: ask Claude to recommend a specific recipe + URL based on taste profile
+        const tasteProfile = Object.values(recipes).slice(0, 20).map(r => r.name).join(', ');
+        const searchPrompt = `You are a recipe discovery assistant. The user has these recipes in their library (taste profile): ${tasteProfile || 'no recipes yet'}.
+
+USER REQUEST: "${trimmed}"
+
+Recommend ONE specific recipe that would suit this user. Pick a recipe from a well-known cooking website (AllRecipes, Serious Eats, NYT Cooking, Food Network, Bon Appetit, SimplyRecipes, etc).
+
+Return ONLY valid JSON:
+{
+  "recipeName": "exact recipe name",
+  "sourceUrl": "full URL to the specific recipe page",
+  "siteName": "AllRecipes / Serious Eats / etc",
+  "whyItFits": "1 sentence explanation of why this suits their taste"
+}`;
+
+        const searchRaw = await callAI(searchPrompt, { smart: true, maxTokens: 400 });
+        const searchData = extractJSON(searchRaw);
+
+        updateMessage(replyId, { loadingText: `Fetching recipe from ${searchData.siteName || 'the web'}...` });
+
+        // Step 2: fetch and parse the actual recipe page
+        let parsedRecipe = null;
+        try {
+          const { text: pageText } = await fetchURL(searchData.sourceUrl);
+          const parsePrompt = `Extract the recipe from this webpage. ${SCHEMA}\n\n${pageText.slice(0, 8000)}`;
+          parsedRecipe = extractJSON(await callAI(parsePrompt, { smart: true, maxTokens: 1500 }));
+          parsedRecipe.source = searchData.sourceUrl;
+        } catch {
+          // If URL fetch fails, generate the recipe from scratch instead
+          updateMessage(replyId, { loadingText: 'Generating recipe details...' });
+          const genPrompt = `Generate a complete recipe for "${searchData.recipeName}". ${SCHEMA}`;
+          parsedRecipe = extractJSON(await callAI(genPrompt, { smart: true, maxTokens: 1500 }));
+        }
+
+        updateMessage(replyId, {
+          loading: false,
+          text: `Found one that fits your taste: **${parsedRecipe.name}**. ${searchData.whyItFits || ''}\n\nPreview it below and save it to your library or drop it straight onto your plan.`,
+          discoveredRecipe: parsedRecipe,
+        });
+
+      // --- PLAN intent ---
+      } else if (intent === 'plan') {
+        const todayIdx = DAYS_KEYS.indexOf(getTodayDayKeyLocal());
+        const next7Days = Array.from({ length: 7 }, (_, i) => DAYS_KEYS[(todayIdx + i) % 7]);
+        const next7Labels = next7Days.map(dk => DAYS_LABEL[dk]).join(', ');
+        const planShape = next7Days.map(dk => `    "${dk}": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" }`).join(',\n');
+        const prompt = `You are a helpful meal planning assistant for the app "Mise".\n\n${context}\n\nUSER REQUEST: "${trimmed}"\n\nToday is ${DAYS_LABEL[getTodayDayKeyLocal()]}. Plan the NEXT 7 DAYS starting from TODAY (${next7Labels}) - do NOT fill in days that have already passed this week.\nUse recipes from the library above. Prefer variety - avoid repeating the same recipe more than twice.\nYou may include "eating out" slots (1-2 per week max unless the user asks for more).\nRespond ONLY with valid JSON in this exact shape - no markdown, no extra text:\n{\n  "message": "brief friendly intro (1-2 sentences)",\n  "plan": {\n${planShape}\n  }\n}\nFor eating-out slots use: { "slotType": "eating_out", "label": "Restaurant night" }\nFor empty/skipped slots use: null\nUse recipe IDs exactly as shown in the library (the id: values after each recipe name).\nIf the library has fewer than 21 recipes, reuse some or leave nulls.`;
         const raw = await callAI(prompt, { smart: true, maxTokens: 2000 });
         const data = extractJSON(raw);
         const msgDraftPlan = data.plan || {};
         setDraftPlans(prev => ({ ...prev, [replyId]: JSON.parse(JSON.stringify(msgDraftPlan)) }));
-        updateMessage(replyId, { loading: false, text: data.message || "Here's a plan for the week - swap any slot you'd like to change.", draftPlan: msgDraftPlan });
+        updateMessage(replyId, { loading: false, text: data.message || "Here's a plan for the next 7 days - swap any slot you'd like to change.", draftPlan: msgDraftPlan });
 
+      // --- PREP intent ---
       } else if (intent === 'prep') {
         const prompt = `You are a meal prep coach inside the app "Mise".\n\n${context}\n\nUSER REQUEST: "${trimmed}"\n\nAnswer in 3-6 sentences. Be specific about what to prep given the current time and today's plan.\nIf relevant, mention which recipes to cook ahead and how to store things.\nEnd with a line like: RECIPE_LINKS: ["recipeId1","recipeId2"] listing at most 2 relevant recipes from the library (or empty array []).`;
         const raw = await callAI(prompt, { smart: true, maxTokens: 600 });
@@ -300,6 +500,7 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
         if (linkMatch) { try { const ids = JSON.parse(linkMatch[1]); recipeLinks = ids.map(id => ({ id, name: recipes[id]?.name })).filter(r => r.name); } catch { } }
         updateMessage(replyId, { loading: false, text: bodyText, recipeLinks });
 
+      // --- LOG intent ---
       } else if (intent === 'log') {
         const prompt = `You are a meal logging assistant inside "Mise".\n\n${context}\n\nUSER MESSAGE: "${trimmed}"\n\nParse what the user ate. Return ONLY valid JSON:\n{\n  "meal": "breakfast|lunch|dinner",\n  "label": "dish name",\n  "recipeId": "id from library or null",\n  "isNewFood": true/false,\n  "reply": "short friendly confirmation (1 sentence)"\n}`;
         const data = extractJSON(await callAI(prompt, { smart: false, maxTokens: 400 }));
@@ -312,6 +513,7 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
           onSaveAsRecipe: isNew ? () => onSaveRecipe({ name: saveLabel, servings: 2, prepTime: 15, cookTime: 30, cuisine: 'Other', course: 'Main', tags: ['logged'], ingredients: [], instructions: [] }) : null,
         });
 
+      // --- GENERAL ---
       } else {
         const prompt = `You are a helpful cooking and meal planning assistant inside the app "Mise".\n\n${context}\n\nUSER: "${trimmed}"\n\nRespond helpfully in 2-5 sentences. Be specific and use context from the user's meal plan and history.\nIf you mention specific recipes from their library, end with: RECIPE_LINKS: ["id1"] (empty array [] if none).`;
         const raw = await callAI(prompt, { smart: false, maxTokens: 500 });
@@ -336,6 +538,28 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
     finally { setApplying(null); }
   }
 
+  // Save discovered recipe to library only
+  async function handleSaveDiscoveredRecipe(msgId, recipe) {
+    const savedId = onSaveRecipe(recipe);
+    updateMessage(msgId, { discoveredRecipe: null, savedRecipeName: `Saved "${recipe.name}" to your library!` });
+    return savedId;
+  }
+
+  // Save discovered recipe then open the add-to-plan picker
+  async function handleSaveAndPlanDiscoveredRecipe(msgId, recipe) {
+    const savedId = onSaveRecipe(recipe);
+    const savedRecipe = { ...recipe, id: savedId };
+    setAddToPlanTarget({ recipe: savedRecipe, msgId });
+    updateMessage(msgId, { discoveredRecipe: null, savedRecipeName: `Saved "${recipe.name}" - pick a slot below.` });
+  }
+
+  function handleConfirmAddToPlan(day, meal) {
+    if (!addToPlanTarget) return;
+    onPlanMeal(currentWeek, day, meal, addToPlanTarget.recipe.id);
+    updateMessage(addToPlanTarget.msgId, { savedRecipeName: `Added "${addToPlanTarget.recipe.name}" to ${DAYS_LABEL[day]} ${meal}!` });
+    setAddToPlanTarget(null);
+  }
+
   function handleSwapOpen(target) { setSwapTarget(target); }
   function handleSwapClose() { setSwapTarget(null); }
   function handleSwapSave(msgId, day, meal, newSlot) {
@@ -346,19 +570,27 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
 
   const quickPrompts = [
     { label: 'Plan my week', prompt: 'Plan my week with recipes from my library.' },
+    { label: 'Find a new recipe', prompt: 'Search the internet for a new recipe that fits my taste.' },
     { label: 'What can I prep tonight?', prompt: 'What can I prep before dinner tonight?' },
     { label: '3 days of meals', prompt: 'Give me 3 days of meals using what I have.' },
   ];
 
   return (
     <>
+      {addToPlanTarget && (
+        <AddToPlanModal
+          recipe={addToPlanTarget.recipe}
+          onConfirm={handleConfirmAddToPlan}
+          onClose={() => setAddToPlanTarget(null)}
+        />
+      )}
       {!open && (
         <button onClick={() => setOpen(true)} className="w-full text-left bg-white border border-stone-200 rounded-2xl p-5 mb-4 hover:border-orange-300 hover:bg-orange-50/30 transition-colors group">
           <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-600" /><h3 className="font-display text-lg">Meal planning assistant</h3></div>
             <ChevronDown className="w-4 h-4 text-stone-400 group-hover:text-orange-600 transition-colors" />
           </div>
-          <p className="text-sm text-stone-500">"Plan my week", "What can I prep tonight?", quick-log a meal...</p>
+          <p className="text-sm text-stone-500">Plan your week, find new recipes, log meals, get prep help...</p>
         </button>
       )}
       {open && (
@@ -372,7 +604,8 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
               <div className="space-y-2 mb-4">
                 <p className="text-xs text-stone-400 text-center mb-3">Quick starts:</p>
                 {quickPrompts.map(qp => (
-                  <button key={qp.label} onClick={() => send(qp.prompt)} disabled={loading} className="w-full text-left px-3 py-2.5 rounded-xl border border-stone-200 text-sm text-stone-700 hover:border-orange-300 hover:bg-orange-50/30 transition-colors disabled:opacity-50">
+                  <button key={qp.label} onClick={() => send(qp.prompt)} disabled={loading}
+                    className="w-full text-left px-3 py-2.5 rounded-xl border border-stone-200 text-sm text-stone-700 hover:border-orange-300 hover:bg-orange-50/30 transition-colors disabled:opacity-50">
                     {qp.label}
                   </button>
                 ))}
@@ -382,7 +615,9 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
               <ChatMessage key={msg.id} msg={msg} recipes={recipes} recipeList={recipeList}
                 onApplyPlan={handleApplyPlan} onStartCooking={onStartCooking}
                 applying={applying} swapTarget={swapTarget}
-                onSwapOpen={handleSwapOpen} onSwapClose={handleSwapClose} onSwapSave={handleSwapSave} />
+                onSwapOpen={handleSwapOpen} onSwapClose={handleSwapClose} onSwapSave={handleSwapSave}
+                onSaveDiscoveredRecipe={handleSaveDiscoveredRecipe}
+                onSaveAndPlanDiscoveredRecipe={handleSaveAndPlanDiscoveredRecipe} />
             ))}
             <div ref={bottomRef} />
           </div>
@@ -390,7 +625,7 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
             <div className="flex items-center gap-2 bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 focus-within:border-stone-400 transition-colors">
               <input ref={inputRef} value={input} onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                placeholder="Plan my week, what can I prep, log a meal..."
+                placeholder="Plan my week, find a recipe, log a meal..."
                 className="flex-1 bg-transparent text-sm outline-none placeholder-stone-400" disabled={loading} />
               <button onClick={() => send()} disabled={!input.trim() || loading}
                 className="flex-shrink-0 w-7 h-7 rounded-lg bg-orange-700 text-white flex items-center justify-center hover:bg-orange-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
