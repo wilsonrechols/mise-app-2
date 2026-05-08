@@ -24,7 +24,8 @@ const DAYS = [
   {key:'mon',label:'Monday'},{key:'tue',label:'Tuesday'},{key:'wed',label:'Wednesday'},
   {key:'thu',label:'Thursday'},{key:'fri',label:'Friday'},{key:'sat',label:'Saturday'},{key:'sun',label:'Sunday'}
 ];
-const MEALS = ['breakfast','lunch','dinner'];
+const MEALS = ['breakfast','lunch','dinner','snack'];
+const MAIN_MEALS = ['breakfast','lunch','dinner'];
 
 const DEFAULT_STATE = {
   recipes:{}, mealPlan:{}, cookedSlots:{}, manualGrocery:{}, groceryChecks:{},
@@ -284,7 +285,7 @@ function PrepChecklist({guide,checks,onToggle,onRegenerate}){
   );
 }
 
-function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide,onSaveCookLog,onLogCook,mealHistory,onApplyWeekPlan,onAddMealHistory,onSaveRecipe,onPlanMeal}){
+function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onSelectRecipe,onGoToWeek,onStartCookingOverlay,onSaveRecipeGuide,onPrepWeek,onTogglePrepCheck,onRegeneratePrepGuide,onSaveCookLog,onLogCook,mealHistory,onApplyWeekPlan,onAddMealHistory,onSaveRecipe,onPlanMeal}){
   const today=getTodayDayKey();
   const weekPlan=mealPlan[currentWeek]||{};
   const todayPlan=weekPlan[today]||{};
@@ -300,7 +301,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
     const recipe=slot.recipeId?recipes[slot.recipeId]:null;
     return{meal:m,slot,recipe};
   });
-  const nextUncooked=todayMeals.find(({recipe,slot,isEatingOut})=>recipe&&slot&&!isEatingOut);
+  const cookableMeals=todayMeals.filter(({recipe,slot,isEatingOut})=>recipe&&slot&&!isEatingOut);
   const todayDate=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
 
   async function startCooking(recipe,isMealPrep=false){
@@ -323,6 +324,11 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         if(onSaveRecipeGuide)onSaveRecipeGuide(recipe.id,result,isMealPrep);
       }catch(e){setPrepGuide(g=>({...g,loading:false,error:'Could not generate prep guide.'}));}
     }
+  }
+
+  function handleStartCookingOverlay(recipe,isMealPrep=false){
+    const multiplier=isMealPrep?(()=>{const week=mealPlan[currentWeek]||{};for(const d of DAYS){const dp=week[d.key]||{};for(const m of MEALS){const s=normalizeSlot(dp[m]);if(s?.recipeId===recipe.id)return s.multiplier||1;}}return 1;})():1;
+    onStartCookingOverlay&&onStartCookingOverlay(recipe,isMealPrep,multiplier);
   }
 
   if(prepGuide&&!cookingMode){
@@ -469,7 +475,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
                   <button onClick={()=>onSelectRecipe(recipe.id)} className="font-display text-sm hover:text-orange-700 text-left flex-1">{recipe.name}</button>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     {recipe.nutrition&&<NutritionBadge nutrition={recipe.nutrition}/>}
-                    <button onClick={()=>startCooking(recipe,false)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800">
+                    <button onClick={()=>handleStartCookingOverlay(recipe,false)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800">
                       <Play className="w-3 h-3 fill-current"/> Cook
                     </button>
                   </div>
@@ -489,26 +495,30 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         </div>
       </div>
 
-      {/* Cook tonight CTA */}
-      {nextUncooked&&(
-        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4">
-          <p className="text-xs uppercase tracking-wider text-orange-600 font-medium mb-1">Cook tonight</p>
-          <h3 className="font-display text-2xl mb-1">{nextUncooked.recipe.name}</h3>
-          <p className="text-sm text-stone-600 mb-4">
-            {((nextUncooked.recipe.prepTime||0)+(nextUncooked.recipe.cookTime||0))}m total · {nextUncooked.recipe.servings} servings
-            {nextUncooked.recipe.nutrition&&<> · ~{Math.round(nextUncooked.recipe.nutrition.calories)} cal/serving</>}
-          </p>
-          <div className="flex gap-2 flex-wrap">
-            <button onClick={()=>startCooking(nextUncooked.recipe,false)} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800">
-              <Play className="w-4 h-4 fill-current"/> Start cooking
-            </button>
-            <button onClick={()=>startCooking(nextUncooked.recipe,true)} className="flex items-center gap-2 px-4 py-2.5 rounded-full border border-orange-200 text-orange-700 text-sm hover:bg-orange-100">
-              Meal prep
-            </button>
-            <button onClick={()=>onSelectRecipe(nextUncooked.recipe.id)} className="flex items-center gap-2 px-3 py-2.5 rounded-full border border-stone-200 text-stone-600 text-sm hover:bg-stone-100">
-              View
-            </button>
-          </div>
+      {/* Cook cards — one per planned meal today */}
+      {cookableMeals.length>0&&(
+        <div className="space-y-3 mb-4">
+          {cookableMeals.map(({meal,recipe})=>(
+            <div key={meal} className="bg-orange-50 border border-orange-200 rounded-2xl p-5">
+              <p className="text-xs uppercase tracking-wider text-orange-600 font-medium mb-1">{meal}</p>
+              <h3 className="font-display text-2xl mb-1">{recipe.name}</h3>
+              <p className="text-sm text-stone-600 mb-4">
+                {((recipe.prepTime||0)+(recipe.cookTime||0))}m total · {recipe.servings} servings
+                {recipe.nutrition&&<> · ~{Math.round(recipe.nutrition.calories)} cal/serving</>}
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={()=>handleStartCookingOverlay(recipe,false)} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800">
+                  <Play className="w-4 h-4 fill-current"/> Start cooking
+                </button>
+                <button onClick={()=>handleStartCookingOverlay(recipe,true)} className="flex items-center gap-2 px-4 py-2.5 rounded-full border border-orange-200 text-orange-700 text-sm hover:bg-orange-100">
+                  Meal prep
+                </button>
+                <button onClick={()=>onSelectRecipe(recipe.id)} className="flex items-center gap-2 px-3 py-2.5 rounded-full border border-stone-200 text-stone-600 text-sm hover:bg-stone-100">
+                  View
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -533,27 +543,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         </div>
       )}
 
-      {/* Week dot grid */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-5">
-        <h3 className="font-display text-lg mb-3">This week</h3>
-        <div className="grid grid-cols-7 gap-1">
-          {DAYS.map(d=>{
-            const dp=weekPlan[d.key]||{};
-            const isToday=d.key===today;
-            return(
-              <button key={d.key} onClick={onGoToWeek} className={`flex flex-col items-center gap-1 p-2 rounded-xl ${isToday?'bg-orange-50 border border-orange-200':'hover:bg-stone-50'}`}>
-                <span className={`text-[10px] uppercase font-medium ${isToday?'text-orange-700':'text-stone-400'}`}>{d.label.slice(0,1)}</span>
-                <div className="flex flex-col gap-0.5">
-                  {MEALS.map(m=>(
-                    <div key={m} className={`w-2 h-2 rounded-full ${dp[m]?'bg-orange-400':'bg-stone-200'}`}/>
-                  ))}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        <p className="text-xs text-stone-400 mt-2">{Object.values(weekPlan).reduce((t,d)=>t+MEALS.filter(m=>d[m]).length,0)} of {DAYS.length*MEALS.length} meals planned</p>
-      </div>
+
     </div>
   );
 }
@@ -1026,27 +1016,7 @@ function CookReviewCard({recipe,onClose,onSave}){
   );
 }
 
-function QuickLogModal({onClose,onLog,recipes}){
-  const[text,setText]=useState('');const[loading,setLoading]=useState(false);const[parsed,setParsed]=useState(null);const[day,setDay]=useState('today');const[meal,setMeal]=useState('dinner');
-  async function handleParse(){if(!text.trim())return;setLoading(true);try{const result=await callAI(`Given this free-text meal log: "${text}"\nIdentify: 1) Is this a known recipe from: [${recipes.map(r=>r.name).join(', ').slice(0,300)}]? If so, return the EXACT recipe name as "matchedRecipe".\n2) Otherwise, return a short label for "label" (max 5 words).\nReturn ONLY JSON: {"matchedRecipe": "string or null", "label": "string"}`);setParsed(extractJSON(result));}catch(e){setParsed({matchedRecipe:null,label:text.trim()});}setLoading(false);}
-  function handleLog(){if(!parsed&&!text.trim())return;const label=parsed?.label||text.trim();const matchedRecipe=parsed?.matchedRecipe?recipes.find(r=>r.name.toLowerCase()===parsed.matchedRecipe.toLowerCase()):null;onLog({day,meal,label,recipeId:matchedRecipe?.id||null,text:text.trim(),date:Date.now()});onClose();}
-  const dayOptions=[{value:'today',label:'Today'},{value:'yesterday',label:'Yesterday'},...DAYS.map(d=>({value:d.key,label:d.label}))];
-  return(
-    <Modal onClose={onClose}>
-      <div className="flex items-center gap-2 mb-4"><Zap className="w-5 h-5 text-orange-700"/><h3 className="font-display text-2xl">Quick log</h3></div>
-      <p className="text-sm text-stone-600 mb-4">What did you eat? We'll match it to your library or log it free-form.</p>
-      <div className="space-y-3">
-        <div className="flex gap-2"><input autoFocus value={text} onChange={e=>{setText(e.target.value);setParsed(null);}} onKeyDown={e=>e.key==='Enter'&&!parsed&&handleParse()} placeholder="e.g. made a sandwich, chicken tacos…" className="flex-1 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500"/>{!parsed&&<button onClick={handleParse} disabled={!text.trim()||loading} className="px-4 py-2 rounded-lg bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-1.5">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<Sparkles className="w-4 h-4"/>}</button>}</div>
-        {parsed&&<div className="p-3 bg-stone-50 border border-stone-200 rounded-lg">{parsed.matchedRecipe?<p className="text-sm">Matched to: <span className="font-medium text-emerald-700">{parsed.matchedRecipe}</span></p>:<p className="text-sm">Log as: <span className="font-medium">{parsed.label}</span></p>}</div>}
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">When</label><select value={day} onChange={e=>setDay(e.target.value)} className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none">{dayOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
-          <div><label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Meal</label><select value={meal} onChange={e=>setMeal(e.target.value)} className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none">{MEALS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}</select></div>
-        </div>
-        <div className="flex gap-2 justify-end pt-1"><button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-stone-600 hover:bg-stone-100">Cancel</button><button onClick={handleLog} disabled={!text.trim()&&!parsed} className="px-5 py-2 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800 flex items-center gap-2 disabled:opacity-50"><Zap className="w-4 h-4"/> Log meal</button></div>
-      </div>
-    </Modal>
-  );
-}
+
 
 function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry,onClearAll}){
   const cutoff=Date.now()-30*24*60*60*1000;
@@ -1195,14 +1165,88 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
 
 function EditRecipeModal({recipe,onSave,onCancel,onDelete}){return(<Modal onClose={onCancel} wide><h2 className="font-display text-2xl mb-4">Edit recipe</h2><RecipeForm initial={recipe} onSave={onSave} onCancel={onCancel} onDelete={onDelete}/></Modal>);}
 
+
+function CookingOverlay({overlay,onClose,onLogCook,onSaveCookLog,onSaveRecipeGuide,recipes}){
+  const{recipe,stepIdx,isMealPrep,multiplier}=overlay;
+  const[showIngredients,setShowIngredients]=useState(false);
+  const[cookReview,setCookReview]=useState(null);
+  const steps=recipe.instructions||[];
+  const step=steps[stepIdx];
+  const isLast=stepIdx===steps.length-1;
+  const allIngs=recipe.ingredients||[];
+
+  if(cookReview){
+    return(
+      <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="bg-stone-50 rounded-2xl w-full max-w-lg p-6">
+          <p className="text-xs uppercase tracking-wider text-emerald-700 font-medium mb-4 flex items-center gap-2"><Check className="w-3.5 h-3.5" strokeWidth={3}/> Nice work!</p>
+          <CookReviewCard recipe={cookReview} onClose={()=>{setCookReview(null);onClose();}} onSave={(id,log)=>{if(onSaveCookLog)onSaveCookLog(id,log);setCookReview(null);onClose();}}/>
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div className="fixed inset-0 bg-stone-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div className="bg-stone-50 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <span className="text-xs uppercase tracking-wider text-orange-700 font-medium">{recipe.name}</span>
+              {isMealPrep&&multiplier>1&&<span className="ml-2 text-xs text-stone-400">×{multiplier}</span>}
+            </div>
+            <button onClick={onClose} className="p-2 rounded-full hover:bg-stone-200 text-stone-500"><X className="w-4 h-4"/></button>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-stone-400">Step {stepIdx+1} of {steps.length}</span>
+          </div>
+          <div className="w-full bg-stone-100 rounded-full h-1.5 mb-6">
+            <div className="h-full bg-orange-700 rounded-full transition-all" style={{width:`${((stepIdx+1)/steps.length)*100}%`}}/>
+          </div>
+          <div className="bg-white border border-stone-200 rounded-2xl p-6 mb-4 min-h-[160px] flex flex-col justify-center">
+            <span className="font-display text-5xl text-orange-100 font-medium mb-3">{stepIdx+1}.</span>
+            <p className="text-stone-800 text-lg leading-relaxed">{step}</p>
+          </div>
+          <div className="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden">
+            <button onClick={()=>setShowIngredients(v=>!v)} className="w-full flex items-center justify-between px-4 py-3 text-sm text-stone-600 hover:bg-stone-50">
+              <span className="flex items-center gap-2"><Package className="w-3.5 h-3.5"/> All ingredients ({allIngs.length})</span>
+              {showIngredients?<ChevronUp className="w-4 h-4"/>:<ChevronDown className="w-4 h-4"/>}
+            </button>
+            {showIngredients&&<div className="px-4 pb-4 border-t border-stone-100">
+              <div className="mt-3 space-y-1">{allIngs.map((ing,i)=>(
+                <div key={i} className="flex items-center gap-2 text-sm">
+                  <span className="font-medium text-stone-900 w-20 flex-shrink-0 text-xs">{fmtUnit(ing.quantity,ing.unit)}</span>
+                  <span className="text-stone-700">{ing.name}</span>
+                </div>
+              ))}</div>
+            </div>}
+          </div>
+          <div className="flex gap-3">
+            <button
+              disabled={stepIdx===0}
+              onClick={()=>{if(stepIdx>0)onClose({...overlay,stepIdx:stepIdx-1});}}
+              className="flex-1 py-3 rounded-full border border-stone-200 text-sm text-stone-600 disabled:opacity-30 hover:bg-stone-50"
+            >← Back</button>
+            {isLast?(
+              <button onClick={()=>{onLogCook&&onLogCook(recipe.id);setCookReview(recipe);}} className="flex-1 py-3 rounded-full bg-emerald-700 text-white text-sm hover:bg-emerald-800 flex items-center justify-center gap-2"><Check className="w-4 h-4"/> Done!</button>
+            ):(
+              <button onClick={()=>onClose({...overlay,stepIdx:stepIdx+1})} className="flex-1 py-3 rounded-full bg-stone-900 text-white text-sm hover:bg-stone-800">Next step →</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
   const[state,setState,loaded,setLoaded,syncStatus,syncError,lastSynced,manualSync]=useAppState();
   const[view,setView]=useState('home');
   const[selectedRecipeId,setSelectedRecipeId]=useState(null);
+  const[cookingOverlay,setCookingOverlay]=useState(null);
   const[editingRecipe,setEditingRecipe]=useState(null);
   const[planTarget,setPlanTarget]=useState(null);
   const[currentWeek,setCurrentWeek]=useState(getWeekStart());
-  const[showQuickLog,setShowQuickLog]=useState(false);
 
   const recipes=state.recipes;
   const recipeList=useMemo(()=>Object.values(recipes),[recipes]);
@@ -1330,12 +1374,7 @@ export default function App(){
     generateWeekPrepGuide();
   }
 
-  function handleQuickLog({day,meal,label,recipeId,text,date}){
-    let dateISO;if(day==='today')dateISO=todayISO();else if(day==='yesterday')dateISO=daysAgo(1);else dateISO=null;
-    addMealHistory({date,meal,label:label||text,recipeId:recipeId||null,slotType:'recipe'});
-    if(recipeId)setState(s=>({...s,recipes:{...s.recipes,[recipeId]:{...s.recipes[recipeId],cookCount:(s.recipes[recipeId]?.cookCount||0)+1,lastCooked:date}}}));
-    if(dateISO){const ws=getWeekStart(new Date(dateISO));const dayKey=DAYS.find(d=>{const t=new Date(dateISO);const dkm=['sun','mon','tue','wed','thu','fri','sat'];return d.key===dkm[t.getDay()];})?.key;if(dayKey&&recipeId)planMeal(ws,dayKey,meal,recipeId);}
-  }
+
 
   function copyLastWeekPlan(){
     const lastWeek=shiftWeek(currentWeek,-1);
@@ -1405,7 +1444,7 @@ export default function App(){
           weekPrepChecks={state.weekPrepChecks||{}}
           onSelectRecipe={id=>setSelectedRecipeId(id)}
           onGoToWeek={()=>setView('week')}
-          onQuickLog={()=>setShowQuickLog(true)}
+          onStartCookingOverlay={(recipe,isMealPrep,mul)=>setCookingOverlay({recipe,stepIdx:0,isMealPrep,multiplier:mul||1})}
           onSaveRecipeGuide={saveRecipeGuide}
           onPrepWeek={generateWeekPrepGuide}
           onTogglePrepCheck={togglePrepCheck}
@@ -1437,8 +1476,8 @@ export default function App(){
       </nav>
       {selectedRecipe&&!editingRecipe&&<RecipeDetailModal recipe={selectedRecipe} onClose={()=>setSelectedRecipeId(null)} onEdit={()=>setEditingRecipe(selectedRecipe)} onDelete={()=>{if(confirm(`Delete "${selectedRecipe.name}"?`)){deleteRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}} onCook={()=>logCook(selectedRecipe.id)} onRate={rating=>setRating(selectedRecipe.id,rating)} onDuplicate={()=>{duplicateRecipe(selectedRecipe.id);setSelectedRecipeId(null);}} onSaveCookLog={saveCookLog} onSaveRecipe={saveRecipe}/>}
       {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)} onDelete={()=>{if(confirm(`Delete "${editingRecipe.name}"?`)){deleteRecipe(editingRecipe.id);setEditingRecipe(null);setSelectedRecipeId(null);}}}/>}
+      {cookingOverlay&&<CookingOverlay overlay={cookingOverlay} onClose={(updated)=>updated?setCookingOverlay(updated):setCookingOverlay(null)} onLogCook={logCook} onSaveCookLog={saveCookLog} onSaveRecipeGuide={saveRecipeGuide} recipes={recipes}/>}
       {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} prevWeekPlan={state.mealPlan[shiftWeek(planTarget.week,-1)]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
-      {showQuickLog&&<QuickLogModal onClose={()=>setShowQuickLog(false)} onLog={handleQuickLog} recipes={recipeList}/>}
     </div>
   );
 }
