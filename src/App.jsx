@@ -74,7 +74,7 @@ function extractJSON(text){let clean=text.replace(/```json\s*/gi,'').replace(/``
 // ---------- API ----------
 async function callAI(prompt,options={}){
   const model=options.smart?'claude-sonnet-4-6':'claude-haiku-4-5-20251001';
-  const body={model,max_tokens:2000,messages:[{role:'user',content:prompt}]};
+  const body={model,max_tokens:options.maxTokens||2000,messages:[{role:'user',content:prompt}]};
   if(options.tools)body.tools=options.tools;
   if(options.imageData)body.messages=[{role:'user',content:[{type:'image',source:{type:'base64',media_type:options.imageType,data:options.imageData}},{type:'text',text:prompt}]}];
   const r=await fetch(`${SERVER_URL}/ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -825,7 +825,7 @@ Return ONLY a JSON array:
 [{"key":"original_key","name":"ingredient name","amount":"what to buy (e.g. '2 medium onions', '1 bag (5 oz) baby arugula', '1 lb chicken thighs')","category":"same category as input","note":"optional short tip e.g. 'freeze leftovers'"}]
 
 The "key" must exactly match the input key for each item (format: "normalized_name|unit").`,
-        {smart:true}
+        {smart:true,maxTokens:4000}
       ));
       // Add manual items back as-is (they're already user-specified)
       const manualConverted=Object.values(grocery).flat().filter(i=>i.manual).map(i=>({key:i.key,name:i.name,amount:`${fmtUnit(i.quantity,i.unit)}`,category:i.category,manualId:i.manualId,manual:true}));
