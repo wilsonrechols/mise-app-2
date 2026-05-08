@@ -1,16 +1,18 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   BookOpen, Calendar, ShoppingCart, Sparkles, Package,
   Plus, Minus, Search, X, Camera, Link as LinkIcon, FileText, Edit2,
   Trash2, ThumbsUp, ThumbsDown, Clock, Users, ChefHat, Loader2,
   Check, ChevronLeft, ChevronRight, Upload, Save, RefreshCw,
-  Flame, Cloud, CloudOff, Download, Copy
+  Flame, Cloud, CloudOff, Download, Copy, UtensilsCrossed,
+  Star, MessageSquare, Share2, Zap, History, Image as ImageIcon,
+  PenLine, ChevronUp, ChevronDown
 } from 'lucide-react';
 
 // ---------- Config ----------
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'https://mise-sync-311883254950.us-central1.run.app';
 const SECRET_KEY = import.meta.env.VITE_SECRET_KEY || 'mise-wilson-2026';
-const STORAGE_KEY = 'mise:state:v1';
+const STORAGE_KEY = 'mise:state:v2';
 
 // ---------- Constants ----------
 const CATEGORIES = ['produce','dairy','meat','seafood','pantry','spices','frozen','bakery','beverages','other'];
@@ -21,10 +23,15 @@ const DAYS = [
   {key:'thu',label:'Thursday'},{key:'fri',label:'Friday'},{key:'sat',label:'Saturday'},{key:'sun',label:'Sunday'}
 ];
 const MEALS = ['breakfast','lunch','dinner'];
+// Slot types for eating out
+const SLOT_TYPES = ['recipe','leftover','eating_out'];
+
 const DEFAULT_STATE = {
   recipes:{}, mealPlan:{}, cookedSlots:{}, manualGrocery:{}, groceryChecks:{},
   pantry:['salt','black pepper','olive oil','butter','garlic','sugar','flour'],
-  settings:{defaultServings:4}
+  settings:{defaultServings:4},
+  cookLog:{},       // { recipeId: [{date, rating, notes}] }
+  mealHistory:[],   // [{date, slotType, recipeId?, label, note}]
 };
 
 // ---------- Utilities ----------
@@ -42,9 +49,11 @@ function formatQuantity(qty){
   if(bd<0.02){const aw=whole+(bv===1?1:0);if(aw===0)return bs||'0';return bs?`${aw} ${bs}`:aw.toString();}
   return qty.toFixed(2).replace(/\.?0+$/,'');
 }
-function normalizeSlot(slot){if(!slot)return null;if(typeof slot==='string')return{recipeId:slot,multiplier:1};return{multiplier:1,...slot};}
+function normalizeSlot(slot){if(!slot)return null;if(typeof slot==='string')return{recipeId:slot,multiplier:1,slotType:'recipe'};return{multiplier:1,slotType:'recipe',...slot};}
 function getOriginSlot(weekPlan,slot){const norm=normalizeSlot(slot);if(!norm)return null;if(norm.leftoverFrom){const{day,meal}=norm.leftoverFrom;return normalizeSlot(weekPlan?.[day]?.[meal]);}return norm;}
 function listOriginSlots(weekPlan){const result=[];for(const d of DAYS){const dp=weekPlan?.[d.key]||{};for(const m of MEALS){const n=normalizeSlot(dp[m]);if(n&&n.recipeId&&!n.leftoverFrom)result.push({day:d.key,dayLabel:d.label,meal:m,recipeId:n.recipeId,multiplier:n.multiplier});}}return result;}
+function todayISO(){return new Date().toISOString().split('T')[0];}
+function daysAgo(n){const d=new Date();d.setDate(d.getDate()-n);return d.toISOString().split('T')[0];}
 
 // ---------- Gram conversion ----------
 const GPW={g:1,gram:1,grams:1,kg:1000,oz:28.35,ounce:28.35,ounces:28.35,lb:453.6,lbs:453.6,pound:453.6,pounds:453.6};
@@ -58,7 +67,7 @@ function extractJSON(text){let clean=text.replace(/```json\s*/gi,'').replace(/``
 
 // ---------- API ----------
 async function callAI(prompt,options={}){
-  const model = options.smart ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
+  const model = options.smart ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001';
   const body={model,max_tokens:2000,messages:[{role:'user',content:prompt}]};
   if(options.tools)body.tools=options.tools;
   if(options.imageData)body.messages=[{role:'user',content:[{type:'image',source:{type:'base64',media_type:options.imageType,data:options.imageData}},{type:'text',text:prompt}]}];
@@ -174,18 +183,26 @@ function Modal({children,onClose,wide}){
 function RecipeCard({recipe,onClick}){
   const tt=(recipe.prepTime||0)+(recipe.cookTime||0);
   return(
-    <button onClick={onClick} className="rcs text-left bg-white border border-stone-200 rounded-2xl p-5 transition-all hover:-translate-y-0.5 w-full">
-      <div className="flex items-start justify-between mb-3">
-        <span className="text-xs uppercase tracking-wider text-orange-700 font-medium">{recipe.cuisine||'Recipe'}{recipe.course&&recipe.course!=='Main'&&<span className="text-stone-400"> · {recipe.course}</span>}</span>
-        <div className="flex items-center gap-1.5">{recipe.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}{recipe.cookCount>0&&<span className="text-xs text-stone-500">×{recipe.cookCount}</span>}</div>
+    <button onClick={onClick} className="rcs text-left bg-white border border-stone-200 rounded-2xl overflow-hidden transition-all hover:-translate-y-0.5 w-full">
+      {/* AI photo if present */}
+      {recipe.photoUrl&&(
+        <div className="w-full h-36 overflow-hidden bg-stone-100">
+          <img src={recipe.photoUrl} alt={recipe.name} className="w-full h-full object-cover"/>
+        </div>
+      )}
+      <div className="p-5">
+        <div className="flex items-start justify-between mb-3">
+          <span className="text-xs uppercase tracking-wider text-orange-700 font-medium">{recipe.cuisine||'Recipe'}{recipe.course&&recipe.course!=='Main'&&<span className="text-stone-400"> · {recipe.course}</span>}</span>
+          <div className="flex items-center gap-1.5">{recipe.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}{recipe.cookCount>0&&<span className="text-xs text-stone-500">×{recipe.cookCount}</span>}</div>
+        </div>
+        <h3 className="font-display text-xl font-medium leading-tight mb-3">{recipe.name}</h3>
+        <div className="flex items-center gap-3 text-xs text-stone-500 mb-3">
+          {tt>0&&<span className="flex items-center gap-1"><Clock className="w-3 h-3"/> {tt}m</span>}
+          {recipe.servings&&<span className="flex items-center gap-1"><Users className="w-3 h-3"/> {recipe.servings}</span>}
+          <span>{(recipe.ingredients||[]).length} ingredients</span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">{(recipe.tags||[]).slice(0,3).map(t=><span key={t} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{t}</span>)}</div>
       </div>
-      <h3 className="font-display text-xl font-medium leading-tight mb-3">{recipe.name}</h3>
-      <div className="flex items-center gap-3 text-xs text-stone-500 mb-3">
-        {tt>0&&<span className="flex items-center gap-1"><Clock className="w-3 h-3"/> {tt}m</span>}
-        {recipe.servings&&<span className="flex items-center gap-1"><Users className="w-3 h-3"/> {recipe.servings}</span>}
-        <span>{(recipe.ingredients||[]).length} ingredients</span>
-      </div>
-      <div className="flex flex-wrap gap-1.5">{(recipe.tags||[]).slice(0,3).map(t=><span key={t} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{t}</span>)}</div>
     </button>
   );
 }
@@ -193,15 +210,54 @@ function RecipeCard({recipe,onClick}){
 // ---------- RecipeForm ----------
 function RecipeForm({initial,onSave,onCancel}){
   const[recipe,setRecipe]=useState(()=>initial||{name:'',servings:4,prepTime:15,cookTime:30,cuisine:'American',course:'Main',tags:[],ingredients:[{name:'',quantity:1,unit:'',category:'produce'}],instructions:[''],source:'',notes:''});
+  const[generatingPhoto,setGeneratingPhoto]=useState(false);
   const u=(f,v)=>setRecipe(r=>({...r,[f]:v}));
   const ui=(i,f,v)=>setRecipe(r=>{const a=[...r.ingredients];a[i]={...a[i],[f]:v};return{...r,ingredients:a};});
   const un=(i,v)=>setRecipe(r=>{const a=[...r.instructions];a[i]=v;return{...r,instructions:a};});
+
+  async function generatePhoto(){
+    if(!recipe.name.trim())return;
+    setGeneratingPhoto(true);
+    try{
+      // Ask AI to give us a Unsplash-style search description for the dish
+      const desc=await callAI(`For the dish "${recipe.name}" (${recipe.cuisine||''}), give me a single short phrase (3-6 words, no quotes) suitable as an Unsplash photo search for a beautiful food photography image of this dish. Reply with ONLY the phrase.`);
+      const query=encodeURIComponent(desc.trim().slice(0,80));
+      // Use Unsplash source for a deterministic food photo
+      const photoUrl=`https://source.unsplash.com/800x500/?${query},food,dish`;
+      u('photoUrl',photoUrl);
+    }catch(e){console.error('Photo gen failed',e);}
+    finally{setGeneratingPhoto(false);}
+  }
+
   function handleSave(){if(!recipe.name.trim()){alert('Recipe needs a name.');return;}onSave({...recipe,ingredients:recipe.ingredients.filter(i=>i.name.trim()),instructions:recipe.instructions.filter(s=>s.trim())});}
   const ic='w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500';
   const lc='text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block';
   return(
     <div className="bg-white border border-stone-200 rounded-2xl p-6 space-y-6">
       <div><label className={lc}>Recipe name</label><input value={recipe.name} onChange={e=>u('name',e.target.value)} placeholder="e.g. Sheet pan harissa chicken" className={`${ic} font-display text-lg`}/></div>
+
+      {/* AI Photo */}
+      <div>
+        <label className={lc}>Recipe photo</label>
+        {recipe.photoUrl?(
+          <div className="space-y-2">
+            <img src={recipe.photoUrl} alt="recipe" className="w-full h-48 object-cover rounded-xl border border-stone-200"/>
+            <div className="flex gap-2">
+              <button type="button" onClick={generatePhoto} disabled={generatingPhoto||!recipe.name.trim()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-stone-200 text-sm text-stone-600 hover:border-stone-400 disabled:opacity-50">
+                {generatingPhoto?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<RefreshCw className="w-3.5 h-3.5"/>} Regenerate
+              </button>
+              <button type="button" onClick={()=>u('photoUrl',null)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-stone-200 text-sm text-stone-600 hover:border-red-200 hover:text-red-600">
+                <X className="w-3.5 h-3.5"/> Remove
+              </button>
+            </div>
+          </div>
+        ):(
+          <button type="button" onClick={generatePhoto} disabled={generatingPhoto||!recipe.name.trim()} className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-stone-300 text-sm text-stone-500 hover:border-orange-400 hover:text-orange-700 disabled:opacity-50 w-full justify-center">
+            {generatingPhoto?<><Loader2 className="w-4 h-4 animate-spin"/> Generating photo…</>:<><ImageIcon className="w-4 h-4"/> Auto-generate photo with AI</>}
+          </button>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <div><label className={lc}>Servings</label><input type="number" min="1" value={recipe.servings} onChange={e=>u('servings',parseInt(e.target.value)||1)} className={ic}/></div>
         <div><label className={lc}>Prep (min)</label><input type="number" min="0" value={recipe.prepTime} onChange={e=>u('prepTime',parseInt(e.target.value)||0)} className={ic}/></div>
@@ -242,7 +298,6 @@ function URLInput({onParsed}){
   async function parse(){
     if(!url.trim())return;setLoading(true);setError(null);
     try{
-      // Fetch page content via server, then parse with AI
       const fetchRes=await fetch(`${SERVER_URL}/fetch-url`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
       if(!fetchRes.ok)throw new Error(`Could not fetch that URL`);
       const{text}=await fetchRes.json();
@@ -309,12 +364,31 @@ function LibraryView({recipes,onSelect,onAdd,onImport}){
   );
 }
 
-// ---------- Week Plan ----------
+// ============================================================
+// FEATURE 1: Eating Out slot type
+// FEATURE 4: Swipe between days on mobile
+// ============================================================
+
 function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,onPickSlot,onClearSlot,onSelectRecipe,onMarkCooked,onSetMultiplier}){
   const week=mealPlan[currentWeek]||{};
   const dkm=['sun','mon','tue','wed','thu','fri','sat'];
-  const[selDay,setSelDay]=useState(()=>{const t=new Date();return getWeekStart(t)===currentWeek?dkm[t.getDay()]:'mon';});
-  useEffect(()=>{const t=new Date();setSelDay(getWeekStart(t)===currentWeek?dkm[t.getDay()]:'mon');},[currentWeek]);
+  const[selDayIdx,setSelDayIdx]=useState(()=>{const t=new Date();const todayKey=dkm[t.getDay()];const idx=DAYS.findIndex(d=>d.key===todayKey);return getWeekStart(t)===currentWeek?(idx>=0?idx:0):0;});
+  const touchStartX=useRef(null);
+
+  useEffect(()=>{const t=new Date();const todayKey=dkm[t.getDay()];const idx=DAYS.findIndex(d=>d.key===todayKey);setSelDayIdx(getWeekStart(t)===currentWeek?(idx>=0?idx:0):0);},[currentWeek]);
+
+  // Touch swipe handlers
+  function onTouchStart(e){touchStartX.current=e.touches[0].clientX;}
+  function onTouchEnd(e){
+    if(touchStartX.current===null)return;
+    const dx=e.changedTouches[0].clientX-touchStartX.current;
+    if(Math.abs(dx)>50){
+      if(dx<0)setSelDayIdx(i=>Math.min(i+1,DAYS.length-1));
+      else setSelDayIdx(i=>Math.max(i-1,0));
+    }
+    touchStartX.current=null;
+  }
+
   function renderDay(d){
     const dp=week[d.key]||{};
     return(
@@ -322,22 +396,34 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
         <div className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2 px-1">{d.label}</div>
         <div className="space-y-2">
           {MEALS.map(m=>{
-            const slot=normalizeSlot(dp[m]),isLO=!!slot?.leftoverFrom,origin=isLO?getOriginSlot(week,slot):slot;
+            const slot=normalizeSlot(dp[m]);
+            const isEatingOut=slot?.slotType==='eating_out';
+            const isLO=!!slot?.leftoverFrom;
+            const origin=isLO?getOriginSlot(week,slot):slot;
             const rid=origin?.recipeId,recipe=rid?recipes[rid]:null,orphaned=isLO&&!recipe;
             const sk=`${d.key}_${m}`,ck=isLO&&slot?.leftoverFrom?`${slot.leftoverFrom.day}_${slot.leftoverFrom.meal}`:sk;
             const isCooked=!!cookedSlots[ck],mul=origin?.multiplier||1;
             const olabel=isLO&&slot?.leftoverFrom?`${DAYS.find(x=>x.key===slot.leftoverFrom.day)?.label.slice(0,3)} ${slot.leftoverFrom.meal}`:null;
             return(
-              <div key={m} className={`border rounded-lg p-2 min-h-[64px] ${isCooked?'border-emerald-200 bg-emerald-50/40':isLO?'border-stone-100 bg-stone-50/40':'border-stone-100'}`}>
+              <div key={m} className={`border rounded-lg p-2 min-h-[64px] ${isCooked?'border-emerald-200 bg-emerald-50/40':isEatingOut?'border-amber-200 bg-amber-50/30':isLO?'border-stone-100 bg-stone-50/40':'border-stone-100'}`}>
                 <div className="flex items-center justify-between mb-1 gap-1">
                   <span className="text-[10px] uppercase tracking-wider text-stone-400">{m}</span>
                   <div className="flex items-center gap-1">
-                    {isLO&&!orphaned&&<span className="text-[9px] uppercase text-stone-500 font-medium px-1.5 py-0.5 bg-stone-100 rounded-full">leftover</span>}
-                    {!isLO&&mul>1&&<span className="text-[10px] font-bold text-orange-700 px-1.5 py-0.5 bg-orange-50 rounded-full">×{mul}</span>}
+                    {isEatingOut&&<span className="text-[9px] uppercase text-amber-700 font-medium px-1.5 py-0.5 bg-amber-100 rounded-full">eating out</span>}
+                    {isLO&&!orphaned&&!isEatingOut&&<span className="text-[9px] uppercase text-stone-500 font-medium px-1.5 py-0.5 bg-stone-100 rounded-full">leftover</span>}
+                    {!isLO&&!isEatingOut&&mul>1&&<span className="text-[10px] font-bold text-orange-700 px-1.5 py-0.5 bg-orange-50 rounded-full">×{mul}</span>}
                     {isCooked&&<Check className="w-3 h-3 text-emerald-700" strokeWidth={3}/>}
                   </div>
                 </div>
-                {recipe||orphaned?(
+                {isEatingOut?(
+                  <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <UtensilsCrossed className="w-3.5 h-3.5 text-amber-600" strokeWidth={1.75}/>
+                      <span className="font-display text-sm text-amber-800">{slot.label||'Eating out'}</span>
+                    </div>
+                    <button onClick={()=>onClearSlot(d.key,m)} className="text-stone-300 hover:text-red-500"><X className="w-3 h-3"/></button>
+                  </div>
+                ):recipe||orphaned?(
                   <div className="flex items-start justify-between gap-1">
                     <button onClick={()=>recipe&&onSelectRecipe(rid)} disabled={orphaned} className={`font-display text-sm text-left leading-tight hover:text-orange-700 flex-1 ${isCooked?'text-stone-500 line-through':''} ${isLO?'italic text-stone-700':''} ${orphaned?'text-stone-400':''}`}>
                       {orphaned?'(origin deleted)':recipe.name}
@@ -361,36 +447,328 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
       </div>
     );
   }
-  const sel=DAYS.find(d=>d.key===selDay)||DAYS[0];
-  return(<div><div className="flex items-center justify-between mb-6 flex-wrap gap-3"><div><h2 className="font-display text-4xl tracking-tight">This week</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)}</p></div><div className="flex items-center gap-1"><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button><button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button></div></div><div className="lg:hidden"><div className="flex gap-1.5 mb-4 overflow-x-auto -mx-4 px-4 pb-1">{DAYS.map(d=>{const dp=week[d.key]||{},filled=MEALS.filter(m=>dp[m]).length,active=selDay===d.key;return(<button key={d.key} onClick={()=>setSelDay(d.key)} className={`flex flex-col items-center gap-0.5 px-3.5 py-2 rounded-xl text-xs whitespace-nowrap flex-shrink-0 ${active?'bg-stone-900 text-stone-50':'bg-white border border-stone-200 text-stone-600'}`}><span className="font-medium">{d.label.slice(0,3)}</span><span className="text-[10px] text-stone-400">{filled>0?filled:'–'}</span></button>);})}</div>{renderDay(sel)}</div><div className="hidden lg:grid lg:grid-cols-7 gap-3">{DAYS.map(d=><div key={d.key}>{renderDay(d)}</div>)}</div></div>);
+
+  const sel=DAYS[selDayIdx]||DAYS[0];
+  return(
+    <div>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div><h2 className="font-display text-4xl tracking-tight">This week</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)}</p></div>
+        <div className="flex items-center gap-1">
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button>
+          <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button>
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button>
+        </div>
+      </div>
+      {/* Mobile: swipeable single-day view */}
+      <div className="lg:hidden">
+        <div className="flex gap-1.5 mb-4 overflow-x-auto -mx-4 px-4 pb-1">
+          {DAYS.map((d,i)=>{const dp=week[d.key]||{},filled=MEALS.filter(m=>dp[m]).length,active=selDayIdx===i;return(<button key={d.key} onClick={()=>setSelDayIdx(i)} className={`flex flex-col items-center gap-0.5 px-3.5 py-2 rounded-xl text-xs whitespace-nowrap flex-shrink-0 ${active?'bg-stone-900 text-stone-50':'bg-white border border-stone-200 text-stone-600'}`}><span className="font-medium">{d.label.slice(0,3)}</span><span className="text-[10px] text-stone-400">{filled>0?filled:'–'}</span></button>);})}
+        </div>
+        {/* Swipe area */}
+        <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd} className="relative overflow-hidden">
+          {renderDay(sel)}
+          {/* Swipe hint arrows */}
+          <div className="flex justify-between mt-3 px-1">
+            <button onClick={()=>setSelDayIdx(i=>Math.max(i-1,0))} disabled={selDayIdx===0} className="p-1.5 rounded-full text-stone-400 disabled:opacity-0 hover:bg-stone-100"><ChevronLeft className="w-4 h-4"/></button>
+            <span className="text-xs text-stone-400 self-center">swipe to navigate</span>
+            <button onClick={()=>setSelDayIdx(i=>Math.min(i+1,DAYS.length-1))} disabled={selDayIdx===DAYS.length-1} className="p-1.5 rounded-full text-stone-400 disabled:opacity-0 hover:bg-stone-100"><ChevronRight className="w-4 h-4"/></button>
+          </div>
+        </div>
+      </div>
+      {/* Desktop: all days */}
+      <div className="hidden lg:grid lg:grid-cols-7 gap-3">{DAYS.map(d=><div key={d.key}>{renderDay(d)}</div>)}</div>
+    </div>
+  );
 }
 
-// ---------- Recipe Picker ----------
-function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,onPick,onPickLeftover,onClose}){
-  const[search,setSearch]=useState('');const[mode,setMode]=useState('library');
+// ---------- Recipe Picker (updated with eating out option) ----------
+function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,onPick,onPickLeftover,onPickEatingOut,onClose}){
+  const[search,setSearch]=useState('');const[mode,setMode]=useState('library');const[eoLabel,setEoLabel]=useState('');
   const filtered=recipes.filter(r=>!search.trim()||r.name.toLowerCase().includes(search.toLowerCase()));
   const origins=useMemo(()=>listOriginSlots(currentWeekPlan||{}).filter(o=>!(o.day===targetSlot?.day&&o.meal===targetSlot?.meal)),[currentWeekPlan,targetSlot]);
-  return(<Modal onClose={onClose}><h3 className="font-display text-2xl mb-3">{title}</h3>{origins.length>0&&<div className="flex gap-1 mb-4 p-1 bg-stone-100 rounded-full"><button onClick={()=>setMode('library')} className={`flex-1 px-3 py-1.5 rounded-full text-xs font-medium ${mode==='library'?'bg-white text-stone-900 shadow-sm':'text-stone-600'}`}>From library</button><button onClick={()=>setMode('leftover')} className={`flex-1 px-3 py-1.5 rounded-full text-xs font-medium ${mode==='leftover'?'bg-white text-stone-900 shadow-sm':'text-stone-600'}`}>Leftovers ({origins.length})</button></div>}{mode==='library'&&<><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search recipes..." className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-4"/><div className="max-h-96 overflow-y-auto space-y-1">{filtered.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No recipes match.</p>}{filtered.map(r=><button key={r.id} onClick={()=>onPick(r.id)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100 flex items-center justify-between"><div><div className="font-display text-base">{r.name}</div><div className="text-xs text-stone-500">{r.cuisine} · {((r.prepTime||0)+(r.cookTime||0))}m</div></div>{r.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}</button>)}</div></>}{mode==='leftover'&&<div className="max-h-96 overflow-y-auto space-y-1">{origins.map(o=>{const r=recipeMap[o.recipeId];if(!r)return null;return(<button key={`${o.day}_${o.meal}`} onClick={()=>onPickLeftover(o.day,o.meal)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100"><div className="text-[10px] uppercase tracking-wider text-stone-500">{o.dayLabel} · {o.meal}</div><div className="font-display text-base">{r.name}</div></button>);})}</div>}</Modal>);
+  const modes=[{id:'library',label:'From library'},{id:'leftover',label:`Leftovers${origins.length>0?` (${origins.length})`:''}`},{id:'eating_out',label:'Eating out'}];
+  return(
+    <Modal onClose={onClose}>
+      <h3 className="font-display text-2xl mb-3">{title}</h3>
+      <div className="flex gap-1 mb-4 p-1 bg-stone-100 rounded-full overflow-x-auto">
+        {modes.map(md=><button key={md.id} onClick={()=>setMode(md.id)} className={`flex-1 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${mode===md.id?'bg-white text-stone-900 shadow-sm':'text-stone-600'}`}>{md.label}</button>)}
+      </div>
+      {mode==='library'&&<>
+        <input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search recipes..." className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-4"/>
+        <div className="max-h-96 overflow-y-auto space-y-1">
+          {filtered.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No recipes match.</p>}
+          {filtered.map(r=><button key={r.id} onClick={()=>onPick(r.id)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100 flex items-center justify-between"><div><div className="font-display text-base">{r.name}</div><div className="text-xs text-stone-500">{r.cuisine} · {((r.prepTime||0)+(r.cookTime||0))}m</div></div>{r.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}</button>)}
+        </div>
+      </>}
+      {mode==='leftover'&&<div className="max-h-96 overflow-y-auto space-y-1">
+        {origins.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No cooked meals this week to use as leftovers.</p>}
+        {origins.map(o=>{const r=recipeMap[o.recipeId];if(!r)return null;return(<button key={`${o.day}_${o.meal}`} onClick={()=>onPickLeftover(o.day,o.meal)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100"><div className="text-[10px] uppercase tracking-wider text-stone-500">{o.dayLabel} · {o.meal}</div><div className="font-display text-base">{r.name}</div></button>);})}
+      </div>}
+      {mode==='eating_out'&&<div className="space-y-4">
+        <div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <UtensilsCrossed className="w-6 h-6 text-amber-600 flex-shrink-0" strokeWidth={1.5}/>
+          <div><p className="text-sm font-medium text-amber-900">Eating out</p><p className="text-xs text-amber-700">Mark this slot as a restaurant meal</p></div>
+        </div>
+        <div>
+          <label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Label (optional)</label>
+          <input value={eoLabel} onChange={e=>setEoLabel(e.target.value)} placeholder="e.g. Date night, Tacos, Birthday dinner…" className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500" onKeyDown={e=>e.key==='Enter'&&onPickEatingOut(eoLabel||'Eating out')}/>
+        </div>
+        <button onClick={()=>onPickEatingOut(eoLabel||'Eating out')} className="w-full py-2.5 rounded-full bg-amber-600 text-white text-sm hover:bg-amber-700 flex items-center justify-center gap-2"><UtensilsCrossed className="w-4 h-4"/> Set as eating out</button>
+      </div>}
+    </Modal>
+  );
 }
 
-// ---------- Grocery ----------
+// ============================================================
+// FEATURE 5: Grocery list sharing — native share sheet
+// ============================================================
 function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,manualItems,onToggleCheck,onAddManualItem,onRemoveManualItem}){
-  const[showAdd,setShowAdd]=useState(false);const[newItem,setNewItem]=useState({name:'',quantity:1,unit:'',category:'other'});
-  const grocery=useMemo(()=>{const week=mealPlan[currentWeek]||{},agg={};for(const day of DAYS){const dp=week[day.key]||{};for(const meal of MEALS){const slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom)continue;const rid=slot.recipeId;if(!rid)continue;const rec=recipes[rid];if(!rec)continue;const mul=slot.multiplier||1;for(const ing of rec.ingredients||[]){const n=normalizeIngredientName(ing.name);if(pantry.some(p=>normalizeIngredientName(p)===n))continue;const key=`${n}|${(ing.unit||'').toLowerCase()}`;const qty=(ing.quantity||0)*mul;if(agg[key])agg[key].quantity+=qty;else agg[key]={key,name:ing.name,quantity:qty,unit:ing.unit||'',category:ing.category||'other',manual:false};}}}for(const item of manualItems){const key=`manual:${item.id}`;agg[key]={key,name:item.name,quantity:item.quantity||0,unit:item.unit||'',category:item.category||'other',manual:true,manualId:item.id};}const bc={};for(const item of Object.values(agg)){if(!bc[item.category])bc[item.category]=[];bc[item.category].push(item);}for(const c of Object.keys(bc))bc[c].sort((a,b)=>a.name.localeCompare(b.name));return bc;},[recipes,mealPlan,currentWeek,pantry,manualItems]);
+  const[showAdd,setShowAdd]=useState(false);const[newItem,setNewItem]=useState({name:'',quantity:1,unit:'',category:'other'});const[shareStatus,setShareStatus]=useState(null);
+  const grocery=useMemo(()=>{const week=mealPlan[currentWeek]||{},agg={};for(const day of DAYS){const dp=week[day.key]||{};for(const meal of MEALS){const slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom||slot.slotType==='eating_out')continue;const rid=slot.recipeId;if(!rid)continue;const rec=recipes[rid];if(!rec)continue;const mul=slot.multiplier||1;for(const ing of rec.ingredients||[]){const n=normalizeIngredientName(ing.name);if(pantry.some(p=>normalizeIngredientName(p)===n))continue;const key=`${n}|${(ing.unit||'').toLowerCase()}`;const qty=(ing.quantity||0)*mul;if(agg[key])agg[key].quantity+=qty;else agg[key]={key,name:ing.name,quantity:qty,unit:ing.unit||'',category:ing.category||'other',manual:false};}}}for(const item of manualItems){const key=`manual:${item.id}`;agg[key]={key,name:item.name,quantity:item.quantity||0,unit:item.unit||'',category:item.category||'other',manual:true,manualId:item.id};}const bc={};for(const item of Object.values(agg)){if(!bc[item.category])bc[item.category]=[];bc[item.category].push(item);}for(const c of Object.keys(bc))bc[c].sort((a,b)=>a.name.localeCompare(b.name));return bc;},[recipes,mealPlan,currentWeek,pantry,manualItems]);
   const ti=Object.values(grocery).reduce((s,i)=>s+i.length,0),cc=Object.keys(checks).length;
+
+  function buildShareText(){
+    const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${ti} items\n`];
+    for(const cat of CATEGORIES.filter(c=>grocery[c]?.length>0)){
+      lines.push(`${cat.toUpperCase()}`);
+      for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${formatQuantity(item.quantity)}${item.unit?' '+item.unit:''} ${item.name}`);}
+      lines.push('');
+    }
+    return lines.join('\n').trim();
+  }
+
+  async function shareList(){
+    const text=buildShareText();
+    if(navigator.share){
+      try{await navigator.share({title:'Mise grocery list',text});setShareStatus('shared');}
+      catch(e){if(e.name!=='AbortError')fallbackCopy(text);}
+    }else{fallbackCopy(text);}
+    setTimeout(()=>setShareStatus(null),2500);
+  }
+
+  function fallbackCopy(text){
+    navigator.clipboard.writeText(text).then(()=>setShareStatus('copied')).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);setShareStatus('copied');});
+  }
+
   function handleAdd(){if(!newItem.name.trim())return;onAddManualItem({name:newItem.name.trim(),quantity:newItem.quantity||1,unit:newItem.unit.trim(),category:newItem.category});setNewItem({name:'',quantity:1,unit:'',category:'other'});setShowAdd(false);}
-  return(<div><div className="flex items-center justify-between mb-6 flex-wrap gap-3"><div><h2 className="font-display text-4xl tracking-tight">Grocery list</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)} · {ti} items · {cc} checked</p></div><div className="flex items-center gap-1"><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button><button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button><button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button></div></div><div className="mb-4">{!showAdd?<button onClick={()=>setShowAdd(true)} className="text-sm text-orange-700 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> Add an item</button>:(<div className="bg-white border border-stone-200 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-12 gap-2"><input type="number" step="0.25" min="0" value={newItem.quantity} onChange={e=>setNewItem({...newItem,quantity:parseFloat(e.target.value)||0})} placeholder="qty" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.unit} onChange={e=>setNewItem({...newItem,unit:e.target.value})} placeholder="unit" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.name} onChange={e=>setNewItem({...newItem,name:e.target.value})} onKeyDown={e=>e.key==='Enter'&&handleAdd()} placeholder="item name" autoFocus className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-2 sm:col-span-4"/><select value={newItem.category} onChange={e=>setNewItem({...newItem,category:e.target.value})} className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-1 sm:col-span-2">{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><button onClick={handleAdd} disabled={!newItem.name.trim()} className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-sm disabled:opacity-50 sm:col-span-1">Add</button><button onClick={()=>{setShowAdd(false);setNewItem({name:'',quantity:1,unit:'',category:'other'});}} className="text-stone-400 hover:text-stone-700 sm:col-span-1 flex items-center justify-center"><X className="w-4 h-4"/></button></div>)}</div>{ti===0?(<div className="bg-white border border-stone-200 rounded-2xl p-10 text-center"><ShoppingCart className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><p className="text-stone-600">Your list is empty.</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{CATEGORIES.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{formatQuantity(item.quantity)}{item.unit&&` ${item.unit}`}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>)}</div>);
+  return(
+    <div>
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+        <div><h2 className="font-display text-4xl tracking-tight">Grocery list</h2><p className="text-stone-600 text-sm mt-1">{formatWeekRange(currentWeek)} · {ti} items · {cc} checked</p></div>
+        <div className="flex items-center gap-1">
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-4 h-4"/></button>
+          <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm text-stone-600 hover:bg-stone-200/60">Today</button>
+          <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-4 h-4"/></button>
+        </div>
+      </div>
+      {/* Share button */}
+      {ti>0&&<div className="mb-4">
+        <button onClick={shareList} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors ${shareStatus==='shared'||shareStatus==='copied'?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-white border border-stone-200 text-stone-600 hover:border-stone-400'}`}>
+          {shareStatus==='shared'?<><Check className="w-4 h-4" strokeWidth={3}/> Shared!</>:shareStatus==='copied'?<><Check className="w-4 h-4" strokeWidth={3}/> Copied!</>:<><Share2 className="w-4 h-4"/> Share list</>}
+        </button>
+      </div>}
+      <div className="mb-4">{!showAdd?<button onClick={()=>setShowAdd(true)} className="text-sm text-orange-700 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> Add an item</button>:(<div className="bg-white border border-stone-200 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-12 gap-2"><input type="number" step="0.25" min="0" value={newItem.quantity} onChange={e=>setNewItem({...newItem,quantity:parseFloat(e.target.value)||0})} placeholder="qty" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.unit} onChange={e=>setNewItem({...newItem,unit:e.target.value})} placeholder="unit" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.name} onChange={e=>setNewItem({...newItem,name:e.target.value})} onKeyDown={e=>e.key==='Enter'&&handleAdd()} placeholder="item name" autoFocus className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-2 sm:col-span-4"/><select value={newItem.category} onChange={e=>setNewItem({...newItem,category:e.target.value})} className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-1 sm:col-span-2">{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><button onClick={handleAdd} disabled={!newItem.name.trim()} className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-sm disabled:opacity-50 sm:col-span-1">Add</button><button onClick={()=>{setShowAdd(false);setNewItem({name:'',quantity:1,unit:'',category:'other'});}} className="text-stone-400 hover:text-stone-700 sm:col-span-1 flex items-center justify-center"><X className="w-4 h-4"/></button></div>)}</div>
+      {ti===0?(<div className="bg-white border border-stone-200 rounded-2xl p-10 text-center"><ShoppingCart className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><p className="text-stone-600">Your list is empty.</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{CATEGORIES.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{formatQuantity(item.quantity)}{item.unit&&` ${item.unit}`}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>)}
+    </div>
+  );
+}
+
+// ============================================================
+// FEATURE 2: Cook Log / Review badge
+// ============================================================
+function CookReviewCard({recipe,onClose,onSave}){
+  const[rating,setRating]=useState(null);const[notes,setNotes]=useState('');
+  function submit(){onSave(recipe.id,{date:Date.now(),rating,notes:notes.trim()});onClose();}
+  const stars=[1,2,3,4,5];
+  return(
+    <div className="bg-white border border-stone-200 rounded-2xl p-5 space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-wider text-orange-700 mb-1">Review cook</p>
+          <h3 className="font-display text-xl font-medium">{recipe.name}</h3>
+        </div>
+        <button onClick={onClose} className="p-1.5 rounded-full hover:bg-stone-100 text-stone-400"><X className="w-4 h-4"/></button>
+      </div>
+      <div>
+        <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2">How did it go?</p>
+        <div className="flex gap-2">
+          {stars.map(s=>(
+            <button key={s} onClick={()=>setRating(s)} className={`w-9 h-9 rounded-full border flex items-center justify-center text-lg transition-colors ${rating>=s?'bg-orange-50 border-orange-300 text-orange-600':'border-stone-200 text-stone-300 hover:border-stone-400'}`}>★</button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2">Notes (optional)</p>
+        <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3} placeholder="Added extra garlic, used thighs instead of breasts…" className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 resize-none"/>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-stone-600 hover:bg-stone-100">Skip</button>
+        <button onClick={submit} className="px-4 py-2 rounded-full bg-stone-900 text-stone-50 text-sm flex items-center gap-1.5"><Check className="w-3.5 h-3.5"/> Save review</button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// FEATURE 6: Quick Log modal
+// ============================================================
+function QuickLogModal({onClose,onLog,recipes}){
+  const[text,setText]=useState('');const[loading,setLoading]=useState(false);const[parsed,setParsed]=useState(null);const[day,setDay]=useState('today');const[meal,setMeal]=useState('dinner');
+
+  async function handleParse(){
+    if(!text.trim())return;
+    setLoading(true);
+    try{
+      const result=await callAI(`Given this free-text meal log: "${text}"
+Identify: 1) Is this a known recipe from: [${recipes.map(r=>r.name).join(', ').slice(0,300)}]? If so, return the EXACT recipe name as "matchedRecipe".
+2) Otherwise, return a short label for "label" (max 5 words).
+Return ONLY JSON: {"matchedRecipe": "string or null", "label": "string"}`);
+      setParsed(extractJSON(result));
+    }catch(e){setParsed({matchedRecipe:null,label:text.trim()});}
+    setLoading(false);
+  }
+
+  function handleLog(){
+    if(!parsed&&!text.trim())return;
+    const label=parsed?.label||text.trim();
+    const matchedRecipe=parsed?.matchedRecipe?recipes.find(r=>r.name.toLowerCase()===parsed.matchedRecipe.toLowerCase()):null;
+    onLog({day,meal,label,recipeId:matchedRecipe?.id||null,text:text.trim(),date:Date.now()});
+    onClose();
+  }
+
+  const dayOptions=[{value:'today',label:'Today'},{value:'yesterday',label:'Yesterday'},...DAYS.map(d=>({value:d.key,label:d.label}))];
+
+  return(
+    <Modal onClose={onClose}>
+      <div className="flex items-center gap-2 mb-4">
+        <Zap className="w-5 h-5 text-orange-700"/>
+        <h3 className="font-display text-2xl">Quick log</h3>
+      </div>
+      <p className="text-sm text-stone-600 mb-4">What did you eat? We'll match it to your library or log it free-form.</p>
+      <div className="space-y-3">
+        <div className="flex gap-2">
+          <input
+            autoFocus
+            value={text}
+            onChange={e=>{setText(e.target.value);setParsed(null);}}
+            onKeyDown={e=>e.key==='Enter'&&!parsed&&handleParse()}
+            placeholder="e.g. made a sandwich, chicken tacos, spaghetti…"
+            className="flex-1 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500"
+          />
+          {!parsed&&<button onClick={handleParse} disabled={!text.trim()||loading} className="px-4 py-2 rounded-lg bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-1.5">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<Sparkles className="w-4 h-4"/>}</button>}
+        </div>
+        {parsed&&(
+          <div className="p-3 bg-stone-50 border border-stone-200 rounded-lg">
+            {parsed.matchedRecipe?(
+              <p className="text-sm">Matched to: <span className="font-medium text-emerald-700">{parsed.matchedRecipe}</span></p>
+            ):(
+              <p className="text-sm">Log as: <span className="font-medium">{parsed.label}</span></p>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">When</label>
+            <select value={day} onChange={e=>setDay(e.target.value)} className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none">
+              {dayOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Meal</label>
+            <select value={meal} onChange={e=>setMeal(e.target.value)} className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none">
+              {MEALS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-full text-sm text-stone-600 hover:bg-stone-100">Cancel</button>
+          <button onClick={handleLog} disabled={!text.trim()&&!parsed} className="px-5 py-2 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800 flex items-center gap-2 disabled:opacity-50"><Zap className="w-4 h-4"/> Log meal</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ============================================================
+// FEATURE 8: Meal History (30 days) — shown in Insights tab
+// FEATURE 2: Cook Log displayed in Insights
+// ============================================================
+function MealHistorySection({mealHistory,recipes}){
+  const cutoff=Date.now()-30*24*60*60*1000;
+  const recent=(mealHistory||[]).filter(h=>h.date>cutoff).sort((a,b)=>b.date-a.date);
+  if(recent.length===0)return(
+    <div className="bg-white border border-stone-200 rounded-2xl p-5">
+      <h3 className="font-display text-lg mb-2 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Meal history</h3>
+      <p className="text-sm text-stone-500">No meals logged yet. Use quick log or mark meals as cooked.</p>
+    </div>
+  );
+  // Group by date
+  const byDate={};for(const h of recent){const d=new Date(h.date).toLocaleDateString('en-US',{month:'short',day:'numeric',weekday:'short'});if(!byDate[d])byDate[d]=[];byDate[d].push(h);}
+  return(
+    <div className="bg-white border border-stone-200 rounded-2xl p-5">
+      <h3 className="font-display text-lg mb-4 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Last 30 days</h3>
+      <div className="space-y-4">
+        {Object.entries(byDate).slice(0,14).map(([date,entries])=>(
+          <div key={date}>
+            <p className="text-xs uppercase tracking-wider text-stone-400 font-medium mb-1.5">{date}</p>
+            <div className="space-y-1">
+              {entries.map((h,i)=>{
+                const recipe=h.recipeId?recipes[h.recipeId]:null;
+                return(
+                  <div key={i} className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-stone-50">
+                    <span className="text-xs text-stone-400 w-14 flex-shrink-0 capitalize">{h.meal||''}</span>
+                    {h.slotType==='eating_out'?<UtensilsCrossed className="w-3.5 h-3.5 text-amber-500 flex-shrink-0"/>:<ChefHat className="w-3.5 h-3.5 text-orange-400 flex-shrink-0"/>}
+                    <span className="text-sm text-stone-700 flex-1">{recipe?.name||h.label||h.text||'Meal'}</span>
+                    {h.rating&&<span className="text-xs text-orange-500">{'★'.repeat(h.rating)}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ---------- Insights ----------
-function InsightsView({recipes,onSaveRecipe}){
-  const[suggestions,setSuggestions]=useState([]);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
+function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog}){
+  const[suggestions,setSuggestions]=useState([]);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);const[showHistory,setShowHistory]=useState(false);
   const stats=useMemo(()=>{const total=recipes.length,ctm=recipes.filter(r=>r.lastCooked&&(Date.now()-r.lastCooked)/86400000<=30).length;const cc={},ic={};let tct=0,tr=0;for(const r of recipes){cc[r.cuisine||'Other']=(cc[r.cuisine||'Other']||0)+1;for(const ing of r.ingredients||[]){const n=normalizeIngredientName(ing.name);ic[n]=(ic[n]||0)+1;}const t=(r.prepTime||0)+(r.cookTime||0);if(t>0){tct+=t;tr++;}}return{total,cookedThisMonth:ctm,cuisineRanked:Object.entries(cc).sort((a,b)=>b[1]-a[1]),ingredientRanked:Object.entries(ic).sort((a,b)=>b[1]-a[1]).slice(0,10),topRated:recipes.filter(r=>r.rating==='up').slice(0,5),mostCooked:[...recipes].sort((a,b)=>(b.cookCount||0)-(a.cookCount||0)).filter(r=>r.cookCount>0).slice(0,5),avgTime:tr?Math.round(tct/tr):0};},[recipes]);
   async function suggest(){setLoading(true);setError(null);try{setSuggestions(extractJSON(await callAI(`Suggest 5 NEW recipes for: cuisines: ${stats.cuisineRanked.slice(0,3).map(([c,n])=>`${c}(${n})`).join(',')}, ingredients: ${stats.ingredientRanked.slice(0,8).map(([i])=>i).join(',')}, avg time: ${stats.avgTime||30}min, already has: ${recipes.map(r=>r.name).join(',').slice(0,500)}. Return ONLY JSON: [{"name":"string","cuisine":"string","why":"string","totalTime":number,"highlights":["string"]}]`,{smart:true})));}catch(e){setError(e.message);}finally{setLoading(false);}}
   async function expand(s){try{onSaveRecipe(extractJSON(await callAI(`Generate the full recipe for: "${s.name}" (${s.cuisine}). ${SCHEMA}`,{smart:true})));setSuggestions(p=>p.filter(x=>x.name!==s.name));}catch{alert('Could not expand that recipe.');}}
   if(recipes.length<3)return(<div className="text-center py-20"><Sparkles className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><h2 className="font-display text-3xl mb-2">Insights coming soon</h2><p className="text-stone-600">Add a few more recipes to see patterns.</p></div>);
   const mx=stats.cuisineRanked[0]?.[1]||1;
-  return(<div><h2 className="font-display text-4xl tracking-tight mb-6">Insights</h2><div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6"><StatCard label="Recipes" value={stats.total}/><StatCard label="Cooked this month" value={stats.cookedThisMonth}/><StatCard label="Avg total time" value={`${stats.avgTime}m`}/><StatCard label="Top rated" value={stats.topRated.length}/></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Cuisine breakdown</h3><div className="space-y-2">{stats.cuisineRanked.slice(0,6).map(([c,n])=>(<div key={c} className="flex items-center gap-3"><span className="text-sm text-stone-600 w-32 truncate">{c}</span><div className="flex-1 bg-stone-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-orange-700" style={{width:`${(n/mx)*100}%`}}/></div><span className="text-xs text-stone-500 w-6 text-right">{n}</span></div>))}</div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Most-used ingredients</h3><div className="flex flex-wrap gap-2">{stats.ingredientRanked.map(([i,n])=><span key={i} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{i} <span className="text-stone-400">·{n}</span></span>)}</div></div></div>{(stats.mostCooked.length>0||stats.topRated.length>0)&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">{stats.mostCooked.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><Flame className="w-4 h-4 text-orange-700"/> Most cooked</h3><div className="space-y-1.5">{stats.mostCooked.map(r=><div key={r.id} className="flex items-center justify-between text-sm"><span className="font-display">{r.name}</span><span className="text-stone-500">×{r.cookCount}</span></div>)}</div></div>}{stats.topRated.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4 text-emerald-600"/> Loved</h3><div className="space-y-1.5">{stats.topRated.map(r=><div key={r.id} className="text-sm font-display">{r.name}</div>)}</div></div>}</div>}<div className="bg-white border border-stone-200 rounded-2xl p-5"><div className="flex items-center justify-between mb-3 flex-wrap gap-2"><h3 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-700"/> Recommendations</h3><button onClick={suggest} disabled={loading} className="px-4 py-1.5 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<RefreshCw className="w-3.5 h-3.5"/>}{loading?'Thinking…':suggestions.length?'Refresh':'Suggest recipes'}</button></div>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}{suggestions.length===0&&!loading&&<p className="text-sm text-stone-500">Based on your library, we'll suggest 5 new recipes you'd likely enjoy.</p>}<div className="space-y-3 mt-3">{suggestions.map((s,i)=><div key={i} className="border border-stone-200 rounded-xl p-4"><div className="flex items-start justify-between gap-3 mb-2"><div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{s.cuisine} · {s.totalTime}m</div><h4 className="font-display text-lg leading-tight">{s.name}</h4></div><button onClick={()=>expand(s)} className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs hover:bg-emerald-800 flex items-center gap-1 flex-shrink-0"><Plus className="w-3 h-3"/> Save</button></div><p className="text-sm text-stone-600 mb-2">{s.why}</p><div className="flex flex-wrap gap-1.5">{(s.highlights||[]).map(h=><span key={h} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{h}</span>)}</div></div>)}</div></div></div>);
+  const recipeMap=useMemo(()=>Object.fromEntries(recipes.map(r=>[r.id,r])),[recipes]);
+  return(
+    <div>
+      <h2 className="font-display text-4xl tracking-tight mb-6">Insights</h2>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+        <StatCard label="Recipes" value={stats.total}/>
+        <StatCard label="Cooked this month" value={stats.cookedThisMonth}/>
+        <StatCard label="Avg total time" value={`${stats.avgTime}m`}/>
+        <StatCard label="Top rated" value={stats.topRated.length}/>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Cuisine breakdown</h3><div className="space-y-2">{stats.cuisineRanked.slice(0,6).map(([c,n])=>(<div key={c} className="flex items-center gap-3"><span className="text-sm text-stone-600 w-32 truncate">{c}</span><div className="flex-1 bg-stone-100 rounded-full h-1.5 overflow-hidden"><div className="h-full bg-orange-700" style={{width:`${(n/mx)*100}%`}}/></div><span className="text-xs text-stone-500 w-6 text-right">{n}</span></div>))}</div></div>
+        <div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">Most-used ingredients</h3><div className="flex flex-wrap gap-2">{stats.ingredientRanked.map(([i,n])=><span key={i} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{i} <span className="text-stone-400">·{n}</span></span>)}</div></div>
+      </div>
+      {(stats.mostCooked.length>0||stats.topRated.length>0)&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        {stats.mostCooked.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><Flame className="w-4 h-4 text-orange-700"/> Most cooked</h3><div className="space-y-1.5">{stats.mostCooked.map(r=><div key={r.id} className="flex items-center justify-between text-sm"><span className="font-display">{r.name}</span><span className="text-stone-500">×{r.cookCount}</span></div>)}</div></div>}
+        {stats.topRated.length>0&&<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 flex items-center gap-2"><ThumbsUp className="w-4 h-4 text-emerald-600"/> Loved</h3><div className="space-y-1.5">{stats.topRated.map(r=><div key={r.id} className="text-sm font-display">{r.name}</div>)}</div></div>}
+      </div>}
+      {/* Meal history section */}
+      <div className="mb-6">
+        <MealHistorySection mealHistory={mealHistory} recipes={recipeMap}/>
+      </div>
+      <div className="bg-white border border-stone-200 rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2"><h3 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-4 h-4 text-orange-700"/> Recommendations</h3><button onClick={suggest} disabled={loading} className="px-4 py-1.5 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<RefreshCw className="w-3.5 h-3.5"/>}{loading?'Thinking…':suggestions.length?'Refresh':'Suggest recipes'}</button></div>
+        {error&&<p className="text-sm text-red-600 mb-3">{error}</p>}
+        {suggestions.length===0&&!loading&&<p className="text-sm text-stone-500">Based on your library, we'll suggest 5 new recipes you'd likely enjoy.</p>}
+        <div className="space-y-3 mt-3">{suggestions.map((s,i)=><div key={i} className="border border-stone-200 rounded-xl p-4"><div className="flex items-start justify-between gap-3 mb-2"><div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{s.cuisine} · {s.totalTime}m</div><h4 className="font-display text-lg leading-tight">{s.name}</h4></div><button onClick={()=>expand(s)} className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs hover:bg-emerald-800 flex items-center gap-1 flex-shrink-0"><Plus className="w-3 h-3"/> Save</button></div><p className="text-sm text-stone-600 mb-2">{s.why}</p><div className="flex flex-wrap gap-1.5">{(s.highlights||[]).map(h=><span key={h} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{h}</span>)}</div></div>)}</div>
+      </div>
+    </div>
+  );
 }
 
 function StatCard({label,value}){return(<div className="bg-white border border-stone-200 rounded-2xl p-4"><div className="text-xs uppercase tracking-wider text-stone-500 mb-1">{label}</div><div className="font-display text-3xl font-medium">{value}</div></div>);}
@@ -401,11 +779,15 @@ function PantryView({pantry,onToggle}){
   return(<div><h2 className="font-display text-4xl tracking-tight mb-2">Pantry staples</h2><p className="text-stone-600 text-sm mb-6">Items here are excluded from your grocery list.</p><div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4"><div className="flex gap-2"><input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(onToggle(input),setInput(''))} placeholder="e.g. soy sauce" className="flex-1 px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500"/><button onClick={()=>{if(input.trim()){onToggle(input);setInput('');}}} className="px-4 py-2 rounded-lg bg-stone-900 text-stone-50 text-sm">Add</button></div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">{pantry.length} staples</h3><div className="flex flex-wrap gap-2">{pantry.map(item=><button key={item} onClick={()=>onToggle(item)} className="text-sm px-3 py-1 bg-stone-100 text-stone-700 rounded-full hover:bg-red-50 hover:text-red-700 flex items-center gap-1.5">{item}<X className="w-3 h-3 opacity-50"/></button>)}</div></div></div>);
 }
 
-// ---------- Recipe Detail ----------
-function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate}){
+// ============================================================
+// FEATURE 3: Duplicate recipe button in detail modal
+// ============================================================
+function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDuplicate,onSaveCookLog}){
   const tt=(recipe.prepTime||0)+(recipe.cookTime||0),lct=recipe.lastCooked?new Date(recipe.lastCooked).toLocaleDateString('en-US',{month:'short',day:'numeric'}):null;
   const bs=recipe.servings||4;const[srv,setSrv]=useState(bs);const scale=bs?srv/bs:1;const[copied,setCopied]=useState(false);
+  const[showReview,setShowReview]=useState(false);
   useEffect(()=>setSrv(recipe.servings||4),[recipe.id,recipe.servings]);
+
   function handleShare(){
     const lines=[recipe.name.toUpperCase(),'─'.repeat(Math.min(recipe.name.length,40))];
     if(recipe.cuisine)lines.push(recipe.cuisine);const meta=[];if(recipe.servings)meta.push(`Serves ${recipe.servings}`);if(tt)meta.push(`Total ${tt}m`);if(meta.length)lines.push(meta.join(' · '));
@@ -413,11 +795,23 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate}){
     lines.push('','INSTRUCTIONS');(recipe.instructions||[]).forEach((s,i)=>lines.push(`  ${i+1}. ${s}`));
     if(recipe.notes)lines.push('',`Notes: ${recipe.notes}`);
     const text=lines.join('\n');
-    navigator.clipboard.writeText(text).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);}).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);setCopied(true);setTimeout(()=>setCopied(false),2000);});
+    if(navigator.share){navigator.share({title:recipe.name,text}).catch(()=>{});}
+    else{navigator.clipboard.writeText(text).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);}).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);setCopied(true);setTimeout(()=>setCopied(false),2000);});}
   }
+
   return(
     <Modal onClose={onClose} wide>
-      <div className="flex items-start justify-between mb-4 gap-3"><div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{recipe.cuisine}{recipe.course&&recipe.course!=='Main'&&<span className="text-stone-400"> · {recipe.course}</span>}</div><h2 className="font-display text-3xl font-medium leading-tight">{recipe.name}</h2>{recipe.notes&&<p className="text-sm text-stone-600 italic mt-2">{recipe.notes}</p>}</div><div className="flex gap-1"><button onClick={onEdit} className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Edit2 className="w-4 h-4"/></button><button onClick={onDelete} className="p-2 rounded-full hover:bg-red-50 text-stone-600 hover:text-red-600"><Trash2 className="w-4 h-4"/></button></div></div>
+      {/* Photo */}
+      {recipe.photoUrl&&<div className="w-full h-56 overflow-hidden rounded-xl mb-5 -mt-1"><img src={recipe.photoUrl} alt={recipe.name} className="w-full h-full object-cover"/></div>}
+      <div className="flex items-start justify-between mb-4 gap-3">
+        <div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{recipe.cuisine}{recipe.course&&recipe.course!=='Main'&&<span className="text-stone-400"> · {recipe.course}</span>}</div><h2 className="font-display text-3xl font-medium leading-tight">{recipe.name}</h2>{recipe.notes&&<p className="text-sm text-stone-600 italic mt-2">{recipe.notes}</p>}</div>
+        <div className="flex gap-1">
+          {/* Duplicate button */}
+          <button onClick={onDuplicate} title="Duplicate recipe" className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Copy className="w-4 h-4"/></button>
+          <button onClick={onEdit} className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Edit2 className="w-4 h-4"/></button>
+          <button onClick={onDelete} className="p-2 rounded-full hover:bg-red-50 text-stone-600 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
+        </div>
+      </div>
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-stone-600 border-y border-stone-100 py-3 mb-5 items-center">
         {tt>0&&<span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {tt}m total</span>}
         {bs>0&&<div className="flex items-center gap-2"><Users className="w-3.5 h-3.5"/><button onClick={()=>setSrv(Math.max(1,srv-1))} className="w-6 h-6 rounded-full bg-stone-100 hover:bg-stone-200 flex items-center justify-center"><Minus className="w-3 h-3"/></button><span className="font-medium text-stone-800 min-w-[68px] text-center">{srv} {srv===1?'serving':'servings'}</span><button onClick={()=>setSrv(srv+1)} className="w-6 h-6 rounded-full bg-stone-100 hover:bg-stone-200 flex items-center justify-center"><Plus className="w-3 h-3"/></button>{srv!==bs&&<button onClick={()=>setSrv(bs)} className="text-xs text-orange-700">reset</button>}</div>}
@@ -433,17 +827,21 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate}){
       <div className="border-t border-stone-100 pt-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2"><span className="text-xs uppercase tracking-wider text-stone-500 mr-1">Rating</span><button onClick={()=>onRate(recipe.rating==='up'?null:'up')} className={`p-1.5 rounded-full ${recipe.rating==='up'?'bg-emerald-50 text-emerald-700':'hover:bg-stone-100 text-stone-400'}`}><ThumbsUp className="w-4 h-4" fill={recipe.rating==='up'?'currentColor':'none'}/></button><button onClick={()=>onRate(recipe.rating==='down'?null:'down')} className={`p-1.5 rounded-full ${recipe.rating==='down'?'bg-red-50 text-red-600':'hover:bg-stone-100 text-stone-400'}`}><ThumbsDown className="w-4 h-4" fill={recipe.rating==='down'?'currentColor':'none'}/></button></div>
         <div className="flex items-center gap-2">
-          <button onClick={handleShare} className={`px-3 py-2 rounded-full border text-sm flex items-center gap-1.5 ${copied?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-200 bg-white text-stone-600 hover:border-stone-400'}`}>{copied?<><Check className="w-3.5 h-3.5" strokeWidth={3}/> Copied!</>:<><Copy className="w-3.5 h-3.5"/> Share recipe</>}</button>
-          <button onClick={()=>onCook()} className="px-4 py-2 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800 flex items-center gap-2"><ChefHat className="w-4 h-4"/> I made this</button>
+          <button onClick={handleShare} className={`px-3 py-2 rounded-full border text-sm flex items-center gap-1.5 ${copied?'border-emerald-300 bg-emerald-50 text-emerald-700':'border-stone-200 bg-white text-stone-600 hover:border-stone-400'}`}>{copied?<><Check className="w-3.5 h-3.5" strokeWidth={3}/> Copied!</>:<><Share2 className="w-3.5 h-3.5"/> Share</>}</button>
+          <button onClick={()=>{onCook();setShowReview(true);}} className="px-4 py-2 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800 flex items-center gap-2"><ChefHat className="w-4 h-4"/> I made this</button>
         </div>
       </div>
+      {/* Inline cook review */}
+      {showReview&&<div className="mt-4"><CookReviewCard recipe={recipe} onClose={()=>setShowReview(false)} onSave={(id,log)=>{onSaveCookLog(id,log);setShowReview(false);}}/></div>}
     </Modal>
   );
 }
 
 function EditRecipeModal({recipe,onSave,onCancel}){return(<Modal onClose={onCancel} wide><h2 className="font-display text-2xl mb-4">Edit recipe</h2><RecipeForm initial={recipe} onSave={onSave} onCancel={onCancel}/></Modal>);}
 
-// ---------- Main App ----------
+// ============================================================
+// MAIN APP
+// ============================================================
 export default function App(){
   const[state,setState,loaded,setLoaded,syncStatus,syncError,lastSynced,manualSync]=useAppState();
   const[view,setView]=useState('library');
@@ -451,16 +849,96 @@ export default function App(){
   const[editingRecipe,setEditingRecipe]=useState(null);
   const[planTarget,setPlanTarget]=useState(null);
   const[currentWeek,setCurrentWeek]=useState(getWeekStart());
+  const[showQuickLog,setShowQuickLog]=useState(false);
+  // Feature 2: pending review after cook
+  const[pendingReview,setPendingReview]=useState(null); // recipeId
+
   const recipes=state.recipes;
   const recipeList=useMemo(()=>Object.values(recipes),[recipes]);
 
+  // ---- unreviewed cook count for badge ----
+  const unreviewedCount=useMemo(()=>{
+    const cookLog=state.cookLog||{};
+    let count=0;
+    for(const r of recipeList){
+      if(!r.lastCooked)continue;
+      const age=(Date.now()-r.lastCooked)/86400000;
+      if(age>7)continue; // only flag within 7 days
+      const logs=(cookLog[r.id]||[]);
+      const lastLogDate=logs.length>0?logs[logs.length-1].date:0;
+      if(r.lastCooked>lastLogDate)count++;
+    }
+    return count;
+  },[recipeList,state.cookLog]);
+
   function saveRecipe(recipe){const id=recipe.id||generateId(),now=Date.now(),existing=recipes[id];setState(s=>({...s,recipes:{...s.recipes,[id]:{cookCount:0,lastCooked:null,rating:null,createdAt:now,...existing,...recipe,id}}}));return id;}
   function deleteRecipe(id){setState(s=>{const{[id]:_,...rest}=s.recipes;return{...s,recipes:rest};});}
-  function logCook(id){setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],cookCount:(s.recipes[id].cookCount||0)+1,lastCooked:Date.now()}}}));}
+  function logCook(id){
+    setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],cookCount:(s.recipes[id].cookCount||0)+1,lastCooked:Date.now()}}}));
+    // add to meal history
+    const recipe=recipes[id];
+    if(recipe){
+      addMealHistory({date:Date.now(),recipeId:id,label:recipe.name,meal:'dinner',slotType:'recipe'});
+    }
+  }
   function setRating(id,rating){setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],rating}}}));}
-  function planMeal(week,day,meal,slotValue){setState(s=>{const wp=s.mealPlan[week]||{},slotKey=`${day}_${meal}`;const wc=s.cookedSlots[week]||{},newCooked={...wc};delete newCooked[slotKey];const newWeek={...wp};if(slotValue===null){const dp=newWeek[day]||{},nd={...dp};delete nd[meal];newWeek[day]=nd;for(const d of Object.keys(newWeek)){const dm=newWeek[d];if(!dm)continue;for(const m of Object.keys(dm)){const n=normalizeSlot(dm[m]);if(n?.leftoverFrom?.day===day&&n.leftoverFrom.meal===meal){const u={...newWeek[d]};delete u[m];newWeek[d]=u;delete newCooked[`${d}_${m}`];}}}}else{const ns=typeof slotValue==='string'?{recipeId:slotValue,multiplier:1}:{multiplier:1,...slotValue};newWeek[day]={...(newWeek[day]||{}),[meal]:ns};}return{...s,mealPlan:{...s.mealPlan,[week]:newWeek},cookedSlots:{...s.cookedSlots,[week]:newCooked}};});}
+
+  // Feature 3: duplicate
+  function duplicateRecipe(id){
+    const orig=recipes[id];if(!orig)return;
+    const newId=generateId();
+    const copy={...orig,id:newId,name:`${orig.name} (copy)`,createdAt:Date.now(),cookCount:0,lastCooked:null,rating:null};
+    setState(s=>({...s,recipes:{...s.recipes,[newId]:copy}}));
+    return newId;
+  }
+
+  // Feature 2: save cook log entry
+  function saveCookLog(recipeId,logEntry){
+    setState(s=>{const prev=s.cookLog||{};const entries=prev[recipeId]||[];return{...s,cookLog:{...prev,[recipeId]:[...entries,logEntry]}};});
+  }
+
+  // Feature 6/8: meal history
+  function addMealHistory(entry){
+    setState(s=>{const hist=(s.mealHistory||[]);return{...s,mealHistory:[...hist,{...entry,id:generateId()}]};});
+  }
+
+  // Feature 6: quick log handler
+  function handleQuickLog({day,meal,label,recipeId,text,date}){
+    // Resolve day key
+    let dateISO;
+    if(day==='today')dateISO=todayISO();
+    else if(day==='yesterday')dateISO=daysAgo(1);
+    else dateISO=null;
+
+    // Add to meal history
+    addMealHistory({date,meal,label:label||text,recipeId:recipeId||null,slotType:'recipe'});
+
+    // If it matches a recipe, log the cook
+    if(recipeId){
+      setState(s=>({...s,recipes:{...s.recipes,[recipeId]:{...s.recipes[recipeId],cookCount:(s.recipes[recipeId]?.cookCount||0)+1,lastCooked:date}}}));
+    }
+
+    // Optionally fill week plan slot for today/yesterday
+    if(dateISO){
+      const ws=getWeekStart(new Date(dateISO));
+      const dayKey=DAYS.find(d=>{
+        const t=new Date(dateISO);
+        const dkm=['sun','mon','tue','wed','thu','fri','sat'];
+        return d.key===dkm[t.getDay()];
+      })?.key;
+      if(dayKey&&recipeId){
+        planMeal(ws,dayKey,meal,recipeId);
+      }
+    }
+  }
+
+  function planMeal(week,day,meal,slotValue){setState(s=>{const wp=s.mealPlan[week]||{},slotKey=`${day}_${meal}`;const wc=s.cookedSlots[week]||{},newCooked={...wc};delete newCooked[slotKey];const newWeek={...wp};if(slotValue===null){const dp=newWeek[day]||{},nd={...dp};delete nd[meal];newWeek[day]=nd;for(const d of Object.keys(newWeek)){const dm=newWeek[d];if(!dm)continue;for(const m of Object.keys(dm)){const n=normalizeSlot(dm[m]);if(n?.leftoverFrom?.day===day&&n.leftoverFrom.meal===meal){const u={...newWeek[d]};delete u[m];newWeek[d]=u;delete newCooked[`${d}_${m}`];}}}}else{const ns=typeof slotValue==='string'?{recipeId:slotValue,multiplier:1,slotType:'recipe'}:{multiplier:1,slotType:'recipe',...slotValue};newWeek[day]={...(newWeek[day]||{}),[meal]:ns};}return{...s,mealPlan:{...s.mealPlan,[week]:newWeek},cookedSlots:{...s.cookedSlots,[week]:newCooked}};});}
   function setSlotMultiplier(week,day,meal,multiplier){setState(s=>{const wp=s.mealPlan[week]||{},dp=wp[day]||{},slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom)return s;return{...s,mealPlan:{...s.mealPlan,[week]:{...wp,[day]:{...dp,[meal]:{...slot,multiplier:Math.max(1,Math.min(6,multiplier))}}}}}});}
-  function markSlotCooked(week,day,meal,recipeId,currentlyCooked){const slotKey=`${day}_${meal}`;setState(s=>{const wc=s.cookedSlots[week]||{},newCooked={...wc};if(currentlyCooked){delete newCooked[slotKey];return{...s,cookedSlots:{...s.cookedSlots,[week]:newCooked}};}newCooked[slotKey]={date:Date.now()};const r=s.recipes[recipeId];const ur=r?{...s.recipes,[recipeId]:{...r,cookCount:(r.cookCount||0)+1,lastCooked:Date.now()}}:s.recipes;return{...s,cookedSlots:{...s.cookedSlots,[week]:newCooked},recipes:ur};});}
+  function markSlotCooked(week,day,meal,recipeId,currentlyCooked){const slotKey=`${day}_${meal}`;setState(s=>{const wc=s.cookedSlots[week]||{},newCooked={...wc};if(currentlyCooked){delete newCooked[slotKey];return{...s,cookedSlots:{...s.cookedSlots,[week]:newCooked}};}newCooked[slotKey]={date:Date.now()};const r=s.recipes[recipeId];const ur=r?{...s.recipes,[recipeId]:{...r,cookCount:(r.cookCount||0)+1,lastCooked:Date.now()}}:s.recipes;return{...s,cookedSlots:{...s.cookedSlots,[week]:newCooked},recipes:ur};});
+    // add to history
+    const recipe=recipes[recipeId];
+    if(recipe&&!currentlyCooked){addMealHistory({date:Date.now(),recipeId,label:recipe.name,meal,slotType:'recipe'});}
+  }
   function addManualGroceryItem(week,item){setState(s=>{const l=s.manualGrocery[week]||[];return{...s,manualGrocery:{...s.manualGrocery,[week]:[...l,{...item,id:generateId()}]}};});}
   function removeManualGroceryItem(week,id){setState(s=>{const l=s.manualGrocery[week]||[];return{...s,manualGrocery:{...s.manualGrocery,[week]:l.filter(x=>x.id!==id)}};});}
   function togglePantry(item){const n=item.toLowerCase().trim();if(!n)return;setState(s=>({...s,pantry:s.pantry.includes(n)?s.pantry.filter(p=>p!==n):[...s.pantry,n]}));}
@@ -469,18 +947,46 @@ export default function App(){
   if(!loaded)return<LoadingScreen onSkip={()=>setLoaded(true)}/>;
 
   const selectedRecipe=selectedRecipeId?recipes[selectedRecipeId]:null;
-  const tabs=[{id:'library',label:'Library',icon:BookOpen},{id:'add',label:'Add Recipe',icon:Plus},{id:'week',label:'This Week',icon:Calendar},{id:'grocery',label:'Grocery',icon:ShoppingCart},{id:'insights',label:'Insights',icon:Sparkles},{id:'pantry',label:'Pantry',icon:Package}];
-  const mobTabs=[{id:'library',label:'Library',icon:BookOpen},{id:'add',label:'Add',icon:Plus},{id:'week',label:'Week',icon:Calendar},{id:'grocery',label:'Grocery',icon:ShoppingCart},{id:'insights',label:'Insights',icon:Sparkles},{id:'pantry',label:'Pantry',icon:Package}];
+
+  const tabs=[
+    {id:'library',label:'Library',icon:BookOpen},
+    {id:'add',label:'Add Recipe',icon:Plus},
+    {id:'week',label:'This Week',icon:Calendar},
+    {id:'grocery',label:'Grocery',icon:ShoppingCart},
+    {id:'insights',label:'Insights',icon:Sparkles,badge:unreviewedCount>0},
+    {id:'pantry',label:'Pantry',icon:Package}
+  ];
+  const mobTabs=[
+    {id:'library',label:'Library',icon:BookOpen},
+    {id:'add',label:'Add',icon:Plus},
+    {id:'week',label:'Week',icon:Calendar},
+    {id:'grocery',label:'Grocery',icon:ShoppingCart},
+    {id:'insights',label:'Insights',icon:Sparkles,badge:unreviewedCount>0},
+    {id:'pantry',label:'Pantry',icon:Package}
+  ];
 
   return(
     <div className="paper-bg min-h-screen text-stone-900">
       <header className="border-b border-stone-200 bg-stone-50/80 backdrop-blur sticky top-0 z-30">
         <div className="max-w-6xl mx-auto px-5 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5"><ChefHat className="w-6 h-6 text-orange-700" strokeWidth={1.75}/><h1 className="font-display text-2xl font-medium tracking-tight">Mise</h1></div>
-          <div className="flex items-center gap-3"><SyncBadge status={syncStatus} lastSynced={lastSynced} onSync={manualSync}/><span className="text-xs text-stone-400 hidden sm:inline">{recipeList.length} {recipeList.length===1?'recipe':'recipes'}</span></div>
+          <div className="flex items-center gap-3">
+            <SyncBadge status={syncStatus} lastSynced={lastSynced} onSync={manualSync}/>
+            <span className="text-xs text-stone-400 hidden sm:inline">{recipeList.length} {recipeList.length===1?'recipe':'recipes'}</span>
+            {/* Quick log button in header */}
+            <button onClick={()=>setShowQuickLog(true)} title="Quick log a meal" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800">
+              <Zap className="w-3.5 h-3.5"/> <span className="hidden sm:inline">Quick log</span>
+            </button>
+          </div>
         </div>
         <nav className="hidden sm:flex max-w-6xl mx-auto px-5 pb-3 gap-1 overflow-x-auto">
-          {tabs.map(tab=>{const Icon=tab.icon;const active=view===tab.id;return(<button key={tab.id} onClick={()=>setView(tab.id)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${active?'bg-stone-900 text-stone-50':'text-stone-600 hover:bg-stone-200/60'}`}><Icon className="w-3.5 h-3.5" strokeWidth={2}/>{tab.label}</button>);})}
+          {tabs.map(tab=>{const Icon=tab.icon;const active=view===tab.id;return(
+            <button key={tab.id} onClick={()=>setView(tab.id)} className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm whitespace-nowrap ${active?'bg-stone-900 text-stone-50':'text-stone-600 hover:bg-stone-200/60'}`}>
+              <Icon className="w-3.5 h-3.5" strokeWidth={2}/>{tab.label}
+              {/* Feature 2: Review badge */}
+              {tab.badge&&<span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-orange-600 text-white text-[9px] flex items-center justify-center font-bold animate-pulse">{unreviewedCount}</span>}
+            </button>
+          );})}
         </nav>
       </header>
 
@@ -491,19 +997,47 @@ export default function App(){
         {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
         {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)}/>}
         {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)}/>}
-        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)}/>}
+        {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
       </main>
 
+      {/* Mobile bottom nav */}
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-stone-50/95 backdrop-blur border-t border-stone-200 z-30" style={{paddingBottom:'env(safe-area-inset-bottom,0)'}}>
         <div className="grid grid-cols-6">
-          {mobTabs.map(tab=>{const Icon=tab.icon;const active=view===tab.id;return(<button key={tab.id} onClick={()=>setView(tab.id)} className={`flex flex-col items-center justify-center gap-0.5 py-2 px-1 ${active?'text-orange-700':'text-stone-500 hover:text-stone-700'}`}><Icon className="w-5 h-5" strokeWidth={active?2:1.75}/><span className="text-[10px] font-medium">{tab.label}</span></button>);})}
+          {mobTabs.map(tab=>{const Icon=tab.icon;const active=view===tab.id;return(
+            <button key={tab.id} onClick={()=>setView(tab.id)} className={`relative flex flex-col items-center justify-center gap-0.5 py-2 px-1 ${active?'text-orange-700':'text-stone-500 hover:text-stone-700'}`}>
+              <Icon className="w-5 h-5" strokeWidth={active?2:1.75}/>
+              <span className="text-[10px] font-medium">{tab.label}</span>
+              {tab.badge&&<span className="absolute top-1 right-3 w-3.5 h-3.5 rounded-full bg-orange-600 text-white text-[8px] flex items-center justify-center font-bold animate-pulse">{unreviewedCount}</span>}
+            </button>
+          );})}
         </div>
       </nav>
 
-      {selectedRecipe&&!editingRecipe&&<RecipeDetailModal recipe={selectedRecipe} onClose={()=>setSelectedRecipeId(null)} onEdit={()=>setEditingRecipe(selectedRecipe)} onDelete={()=>{if(confirm(`Delete "${selectedRecipe.name}"?`)){deleteRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}} onCook={()=>logCook(selectedRecipe.id)} onRate={rating=>setRating(selectedRecipe.id,rating)}/>}
+      {/* Modals */}
+      {selectedRecipe&&!editingRecipe&&<RecipeDetailModal
+        recipe={selectedRecipe}
+        onClose={()=>setSelectedRecipeId(null)}
+        onEdit={()=>setEditingRecipe(selectedRecipe)}
+        onDelete={()=>{if(confirm(`Delete "${selectedRecipe.name}"?`)){deleteRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}}
+        onCook={()=>logCook(selectedRecipe.id)}
+        onRate={rating=>setRating(selectedRecipe.id,rating)}
+        onDuplicate={()=>{const newId=duplicateRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}
+        onSaveCookLog={saveCookLog}
+      />}
       {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)}/>}
-      {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
+      {planTarget&&<RecipePickerModal
+        recipes={recipeList}
+        recipeMap={recipes}
+        title={`${planTarget.day} ${planTarget.meal}`}
+        currentWeekPlan={state.mealPlan[planTarget.week]||{}}
+        targetSlot={{day:planTarget.day,meal:planTarget.meal}}
+        onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}}
+        onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}}
+        onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}}
+        onClose={()=>setPlanTarget(null)}
+      />}
+      {showQuickLog&&<QuickLogModal onClose={()=>setShowQuickLog(false)} onLog={handleQuickLog} recipes={recipeList}/>}
     </div>
   );
 }
