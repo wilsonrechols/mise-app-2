@@ -235,7 +235,17 @@ function PasteInput({onParsed}){
 
 function URLInput({onParsed}){
   const[url,setUrl]=useState('');const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
-  async function parse(){if(!url.trim())return;setLoading(true);setError(null);try{const r=extractJSON(await callAI(`Search for and read this recipe URL: ${url}\n\nReturn ONLY JSON. ${SCHEMA}`,{tools:[{type:'web_search_20250305',name:'web_search'}]}));r.source=url;onParsed(r);}catch(e){setError(e.message);}finally{setLoading(false);}}
+  async function parse(){
+    if(!url.trim())return;setLoading(true);setError(null);
+    try{
+      // Fetch page content via server, then parse with AI
+      const fetchRes=await fetch(`${SERVER_URL}/fetch-url`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+      if(!fetchRes.ok)throw new Error(`Could not fetch that URL`);
+      const{text}=await fetchRes.json();
+      const r=extractJSON(await callAI(`Extract the recipe from this webpage content:\n\n${text}\n\nReturn ONLY JSON. ${SCHEMA}`));
+      r.source=url;onParsed(r);
+    }catch(e){setError(e.message);}finally{setLoading(false);}
+  }
   return(<div className="bg-white border border-stone-200 rounded-2xl p-6"><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://..." className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-3"/>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}<button onClick={parse} disabled={!url.trim()||loading} className="px-5 py-2 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<LinkIcon className="w-4 h-4"/>}{loading?'Fetching…':'Fetch recipe'}</button><p className="text-xs text-stone-400 mt-3">This can take 10–20 seconds.</p></div>);
 }
 
