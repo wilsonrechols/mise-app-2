@@ -33,6 +33,7 @@ function extractJSON(text) {
 const DAYS_KEYS = ['mon','tue','wed','thu','fri','sat','sun'];
 const DAYS_LABEL = { mon:'Mon', tue:'Tue', wed:'Wed', thu:'Thu', fri:'Fri', sat:'Sat', sun:'Sun' };
 const MEALS_LIST = ['breakfast','lunch','dinner','snack'];
+const MEAL_LABELS = {breakfast:'Breakfast',lunch:'Lunch',dinner:'Dinner',snack:'Snack / Dessert'};
 
 function detectIntent(text) {
   const t = text.toLowerCase();
@@ -216,7 +217,7 @@ function AddToPlanModal({ recipe, onConfirm, onClose }) {
           <div>
             <label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Meal</label>
             <select value={meal} onChange={e => setMeal(e.target.value)} className="w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none">
-              {MEALS_LIST.map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+              {MEALS_LIST.map(m => <option key={m} value={m}>{MEAL_LABELS[m]||m.charAt(0).toUpperCase()+m.slice(1)}</option>)}
             </select>
           </div>
         </div>
@@ -253,7 +254,7 @@ function MealPlanPreview({ draftPlan, recipes, onSwap, onApply, applying }) {
                     return (
                       <button key={mealName} onClick={() => onSwap(dayKey, mealName, slot)}
                         className={`text-left px-2 py-1.5 rounded-lg text-xs transition-colors ${slot.type === 'empty' ? 'border border-dashed border-stone-200 text-stone-400 hover:border-stone-400' : slot.type === 'out' ? 'bg-amber-50 text-amber-800 border border-amber-100 hover:bg-amber-100' : 'bg-stone-50 text-stone-700 border border-stone-100 hover:bg-stone-100'}`}>
-                        <div className="text-[9px] uppercase tracking-wider mb-0.5 opacity-60">{mealName}</div>
+                        <div className="text-[9px] uppercase tracking-wider mb-0.5 opacity-60">{MEAL_LABELS[mealName]||mealName}</div>
                         <div className="leading-tight truncate">{slot.type === 'empty' ? '+ add' : slot.label}</div>
                       </button>
                     );
