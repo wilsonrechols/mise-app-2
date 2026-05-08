@@ -288,8 +288,14 @@ function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, o
           const stepLower=step.toLowerCase();
           const relevant=(recipe.ingredients||[]).filter(ing=>{
             const name=ing.name.toLowerCase().trim();
-            const variants=[name,normalizeIngredientName(name),...name.split(' ')];
-            return variants.some(v=>v.length>2&&stepLower.includes(v));
+            const singular=normalizeIngredientName(name);
+            // Use full name and singular only — no single-word splits (causes false positives)
+            // e.g. "coconut oil" must not match a step that only mentions "coconut sugar"
+            const variants=[...new Set([name,singular])].filter(v=>v.length>2);
+            return variants.some(v=>{
+              const escaped=v.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+              return new RegExp('(^|[\\s,/])'+escaped+'([\\s,./)]|$)','i').test(stepLower);
+            });
           });
           if(!relevant.length)return null;
           return<div className="mb-6"><p className="text-xs uppercase tracking-wider text-stone-400 mb-2">Used in this step</p><div className="flex flex-wrap gap-2">{relevant.map((i,idx)=><span key={idx} className="text-xs px-2.5 py-1 bg-stone-100 text-stone-700 rounded-full">{formatQuantity(i.quantity)}{i.unit&&` ${i.unit}`} {i.name}</span>)}</div></div>;
