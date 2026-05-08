@@ -771,6 +771,11 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
   const[newItem,setNewItem]=useState({name:'',quantity:1,unit:'',category:'other'});
   const[shareStatus,setShareStatus]=useState(null);
   const[editingOrder,setEditingOrder]=useState(false);
+  const[shopMode,setShopMode]=useState(false);          // toggle: recipe amounts vs shopping units
+  const[shopItems,setShopItems]=useState(null);         // cached AI-converted list: [{name,amount,category,key}]
+  const[shopLoading,setShopLoading]=useState(false);
+  const[shopError,setShopError]=useState(null);
+  const shopCacheKey=useRef(null);                      // track which ingredient fingerprint the cache is for
   const dragItem=useRef(null);
   const dragOver=useRef(null);
   const orderedCats=useMemo(()=>{const order=categoryOrder||CATEGORIES;const missing=CATEGORIES.filter(c=>!order.includes(c));return[...order,...missing];},[categoryOrder]);
@@ -783,13 +788,83 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
     return bc;
   },[recipes,mealPlan,currentWeek,pantry,manualItems]);
   const ti=Object.values(grocery).reduce((s,i)=>s+i.length,0),cc=Object.keys(checks).length;
+
+  // Fingerprint of the current ingredient list — if it changes, cache is stale
+  const ingredientFingerprint=useMemo(()=>{
+    const allItems=Object.values(grocery).flat().filter(i=>!i.manual);
+    return allItems.map(i=>`${i.key}:${i.quantity}`).sort().join('|');
+  },[grocery]);
+
+  async function convertToShopUnits(){
+    // Use cache if fingerprint hasn't changed
+    if(shopItems&&shopCacheKey.current===ingredientFingerprint){setShopMode(true);return;}
+    setShopMode(true);setShopLoading(true);setShopError(null);
+    try{
+      const allItems=Object.values(grocery).flat().filter(i=>!i.manual);
+      if(!allItems.length){setShopItems([]);setShopLoading(false);return;}
+      const ingredientList=allItems.map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name} (category: ${i.category})`).join('\n');
+      const result=extractJSON(await callAI(
+        `You are a US grocery shopping assistant. Convert these recipe ingredient amounts into what a shopper would actually buy at a standard US grocery store. Use realistic US retail package sizes (e.g. bags, bunches, cans, cartons, lbs, oz).
+
+Rules:
+- Round up to the nearest standard retail unit — never tell someone to buy a fraction of a package
+- For produce sold by weight (chicken, beef, carrots, etc.), give lbs rounded to nearest 0.25lb
+- For produce sold by unit (onions, lemons, garlic heads, etc.), give a count
+- For produce sold by bag/bunch (baby spinach, kale, herbs, green onions), give bag or bunch count
+- For canned goods, give number of standard cans with size (e.g. "1 can (15 oz)")
+- For dairy, give standard retail sizes (e.g. "1 pint heavy cream", "1 lb butter")
+- For dry goods, give standard sizes (e.g. "1 bag (16 oz) pasta", "1 container (32 oz) chicken broth")
+- For spices/condiments needed in small amounts, just say "1 bottle" or "1 jar" — don't specify oz
+- Consolidate: if multiple items can be bought together (e.g. a "mixed herb bundle"), suggest that
+- Keep the same category as the input item
+
+Ingredients to convert:
+${ingredientList}
+
+Return ONLY a JSON array:
+[{"key":"original_key","name":"ingredient name","amount":"what to buy (e.g. '2 medium onions', '1 bag (5 oz) baby arugula', '1 lb chicken thighs')","category":"same category as input","note":"optional short tip e.g. 'freeze leftovers'"}]
+
+The "key" must exactly match the input key for each item (format: "normalized_name|unit").`,
+        {smart:true}
+      ));
+      // Add manual items back as-is (they're already user-specified)
+      const manualConverted=Object.values(grocery).flat().filter(i=>i.manual).map(i=>({key:i.key,name:i.name,amount:`${fmtUnit(i.quantity,i.unit)}`,category:i.category,manualId:i.manualId,manual:true}));
+      setShopItems([...result,...manualConverted]);
+      shopCacheKey.current=ingredientFingerprint;
+    }catch(e){setShopError('Could not convert. Try again.');setShopMode(false);}
+    finally{setShopLoading(false);}
+  }
+
+  // Group shop items by category maintaining orderedCats order
+  const shopByCategory=useMemo(()=>{
+    if(!shopItems)return{};
+    const bc={};
+    for(const item of shopItems){if(!bc[item.category])bc[item.category]=[];bc[item.category].push(item);}
+    return bc;
+  },[shopItems]);
+
   function handleDragStart(e,idx){dragItem.current=idx;e.dataTransfer.effectAllowed='move';}
   function handleDragEnter(idx){dragOver.current=idx;}
   function handleDragEnd(){if(dragItem.current===null||dragOver.current===null||dragItem.current===dragOver.current){dragItem.current=null;dragOver.current=null;return;}const newOrder=[...orderedCats];const[moved]=newOrder.splice(dragItem.current,1);newOrder.splice(dragOver.current,0,moved);onReorderCategories(newOrder);dragItem.current=null;dragOver.current=null;}
-  function buildShareText(){const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${ti} items\n`];for(const cat of orderedCats.filter(c=>grocery[c]?.length>0)){lines.push(`${cat.toUpperCase()}`);for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${fmtUnit(item.quantity,item.unit)} ${item.name}`);}lines.push('');}return lines.join('\n').trim();}
+
+  function buildShareText(){
+    if(shopMode&&shopItems){
+      const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${shopItems.length} items\n`];
+      for(const cat of orderedCats.filter(c=>shopByCategory[c]?.length>0)){
+        lines.push(cat.toUpperCase());
+        for(const item of shopByCategory[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${item.amount} ${item.name}`);}
+        lines.push('');
+      }
+      return lines.join('\n').trim();
+    }
+    const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${ti} items\n`];
+    for(const cat of orderedCats.filter(c=>grocery[c]?.length>0)){lines.push(`${cat.toUpperCase()}`);for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${fmtUnit(item.quantity,item.unit)} ${item.name}`);}lines.push('');}
+    return lines.join('\n').trim();
+  }
   async function shareList(){const text=buildShareText();if(navigator.share){try{await navigator.share({title:'Mise grocery list',text});setShareStatus('shared');}catch(e){if(e.name!=='AbortError')fallbackCopy(text);}}else{fallbackCopy(text);}setTimeout(()=>setShareStatus(null),2500);}
   function fallbackCopy(text){navigator.clipboard.writeText(text).then(()=>setShareStatus('copied')).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);setShareStatus('copied');});}
-  function handleAdd(){if(!newItem.name.trim())return;onAddManualItem({name:newItem.name.trim(),quantity:newItem.quantity||1,unit:newItem.unit.trim(),category:newItem.category});setNewItem({name:'',quantity:1,unit:'',category:'other'});setShowAdd(false);}
+  function handleAdd(){if(!newItem.name.trim())return;onAddManualItem({name:newItem.name.trim(),quantity:newItem.quantity||1,unit:newItem.unit.trim(),category:newItem.category});setNewItem({name:'',quantity:1,unit:'',category:'other'});setShopItems(null);setShowAdd(false);}
+
   return(
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -801,18 +876,84 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
           <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100">Today</button>
         </div>
       </div>
+
+      {/* Mode toggle + action buttons */}
       <div className="flex items-center gap-2 mb-4 flex-wrap">
+        {ti>0&&(
+          <div className="flex items-center p-1 bg-stone-100 rounded-full">
+            <button onClick={()=>setShopMode(false)} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${!shopMode?'bg-white text-stone-900 shadow-sm':'text-stone-500 hover:text-stone-700'}`}>
+              <ListOrdered className="w-3.5 h-3.5"/> Recipe amounts
+            </button>
+            <button onClick={convertToShopUnits} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${shopMode?'bg-white text-stone-900 shadow-sm':'text-stone-500 hover:text-stone-700'}`}>
+              {shopLoading?<Loader2 className="w-3.5 h-3.5 animate-spin"/>:<ShoppingCart className="w-3.5 h-3.5"/>}
+              Shopping units
+            </button>
+          </div>
+        )}
         {ti>0&&<button onClick={shareList} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors ${shareStatus==='shared'||shareStatus==='copied'?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-white border border-stone-200 text-stone-600 hover:border-stone-400'}`}>{shareStatus==='shared'?<><Check className="w-4 h-4" strokeWidth={3}/> Shared!</>:shareStatus==='copied'?<><Check className="w-4 h-4" strokeWidth={3}/> Copied!</>:<><Share2 className="w-4 h-4"/> Share list</>}</button>}
-        {ti>0&&<button onClick={()=>setEditingOrder(e=>!e)} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors ${editingOrder?'bg-stone-900 text-white':'bg-white border border-stone-200 text-stone-600 hover:border-stone-400'}`}><ListOrdered className="w-4 h-4"/> {editingOrder?'Done':'Reorder sections'}</button>}
+        {ti>0&&!shopMode&&<button onClick={()=>setEditingOrder(e=>!e)} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors ${editingOrder?'bg-stone-900 text-white':'bg-white border border-stone-200 text-stone-600 hover:border-stone-400'}`}><ListOrdered className="w-4 h-4"/> {editingOrder?'Done':'Reorder'}</button>}
+        {shopMode&&shopItems&&<button onClick={()=>{setShopItems(null);shopCacheKey.current=null;convertToShopUnits();}} className="flex items-center gap-1.5 px-3 py-2 rounded-full text-sm bg-white border border-stone-200 text-stone-600 hover:border-stone-400"><RefreshCw className="w-3.5 h-3.5"/> Refresh</button>}
       </div>
-      {editingOrder&&(
+
+      {shopError&&<p className="text-sm text-red-600 mb-4">{shopError}</p>}
+
+      {/* Shopping units mode banner */}
+      {shopMode&&!shopLoading&&shopItems&&(
+        <div className="flex items-center gap-2 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-xl mb-4 text-xs text-emerald-700">
+          <Sparkles className="w-3.5 h-3.5 flex-shrink-0"/>
+          <span>Converted to US retail sizes · amounts may vary by brand</span>
+        </div>
+      )}
+      {shopMode&&shopLoading&&(
+        <div className="flex items-center gap-2 py-8 justify-center text-stone-500 mb-4">
+          <Loader2 className="w-5 h-5 animate-spin text-orange-600"/>
+          <span>Converting to shopping units…</span>
+        </div>
+      )}
+
+      {!shopMode&&editingOrder&&(
         <div className="bg-white border border-stone-200 rounded-2xl p-4 mb-4">
           <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-3">Drag to reorder — match your store layout</p>
           <div className="space-y-1">{orderedCats.map((cat,idx)=>(<div key={cat} draggable onDragStart={e=>handleDragStart(e,idx)} onDragEnter={()=>handleDragEnter(idx)} onDragEnd={handleDragEnd} onDragOver={e=>e.preventDefault()} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-grab active:cursor-grabbing select-none ${grocery[cat]?.length>0?'bg-stone-50 border border-stone-200':'opacity-40'}`}><GripVertical className="w-4 h-4 text-stone-400 flex-shrink-0"/><span className="text-sm capitalize flex-1">{cat}</span>{grocery[cat]?.length>0&&<span className="text-xs text-stone-400">{grocery[cat].length} item{grocery[cat].length!==1?'s':''}</span>}</div>))}</div>
         </div>
       )}
+
       <div className="mb-4">{!showAdd?<button onClick={()=>setShowAdd(true)} className="text-sm text-orange-700 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> Add an item</button>:(<div className="bg-white border border-stone-200 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-12 gap-2"><input type="number" step="0.25" min="0" value={newItem.quantity} onChange={e=>setNewItem({...newItem,quantity:parseFloat(e.target.value)||0})} placeholder="qty" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.unit} onChange={e=>setNewItem({...newItem,unit:e.target.value})} placeholder="unit" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.name} onChange={e=>setNewItem({...newItem,name:e.target.value})} onKeyDown={e=>e.key==='Enter'&&handleAdd()} placeholder="item name" autoFocus className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-2 sm:col-span-4"/><select value={newItem.category} onChange={e=>setNewItem({...newItem,category:e.target.value})} className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-1 sm:col-span-2">{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><button onClick={handleAdd} disabled={!newItem.name.trim()} className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-sm disabled:opacity-50 sm:col-span-1">Add</button><button onClick={()=>{setShowAdd(false);setNewItem({name:'',quantity:1,unit:'',category:'other'});}} className="text-stone-400 hover:text-stone-700 sm:col-span-1 flex items-center justify-center"><X className="w-4 h-4"/></button></div>)}</div>
-      {ti===0?(<div className="bg-white border border-stone-200 rounded-2xl p-10 text-center"><ShoppingCart className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><p className="text-stone-600">Your list is empty.</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{orderedCats.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>)}
+
+      {ti===0?(
+        <div className="bg-white border border-stone-200 rounded-2xl p-10 text-center"><ShoppingCart className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><p className="text-stone-600">Your list is empty.</p></div>
+      ):shopMode&&shopItems&&!shopLoading?(
+        // Shopping units view
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {orderedCats.filter(c=>shopByCategory[c]?.length>0).map(cat=>(
+            <div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5">
+              <h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3>
+              <div className="space-y-1">
+                {shopByCategory[cat].map(item=>{
+                  const checked=!!checks[item.key];
+                  return(
+                    <div key={item.key} className="flex items-start">
+                      <button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-start gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left">
+                        <div className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div>
+                        <div className="flex-1">
+                          <span className={`text-sm ${checked?'line-through text-stone-400':'text-stone-800'}`}>
+                            <span className="font-medium">{item.amount}</span>{' '}{item.name}
+                          </span>
+                          {item.note&&!checked&&<p className="text-[10px] text-stone-400 mt-0.5">{item.note}</p>}
+                        </div>
+                      </button>
+                      {item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600 mt-0.5"><X className="w-3.5 h-3.5"/></button>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ):(
+        // Recipe amounts view (default)
+        !shopMode&&<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{orderedCats.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>
+      )}
     </div>
   );
 }
