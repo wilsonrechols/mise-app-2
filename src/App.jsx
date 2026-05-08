@@ -683,11 +683,15 @@ function AddRecipeView({onSave}){
   );
 }
 
-function LibraryView({recipes,onSelect,onAdd,onImport}){
+function LibraryView({recipes,onSelect,onAdd,onSave,onImport}){
+  const[showAdd,setShowAdd]=useState(false);
+  function handleAdd(){setShowAdd(true);}
+  function handleSave(recipe){onSave(recipe);setShowAdd(false);}
   const[search,setSearch]=useState('');const[cuisineFilter,setCuisineFilter]=useState('');const[courseFilter,setCourseFilter]=useState('All');const[sort,setSort]=useState('recent');const[importError,setImportError]=useState(null);const importRef=useRef(null);
   const courseCounts=useMemo(()=>{const c={All:recipes.length};for(const x of COURSES)c[x]=0;for(const r of recipes){const x=r.course||'Main';c[x]=(c[x]||0)+1;}return c;},[recipes]);
   const filtered=useMemo(()=>{let r=[...recipes];if(search.trim()){const q=search.toLowerCase();r=r.filter(x=>x.name.toLowerCase().includes(q)||(x.tags||[]).some(t=>t.toLowerCase().includes(q))||(x.ingredients||[]).some(i=>i.name.toLowerCase().includes(q)));}if(cuisineFilter)r=r.filter(x=>x.cuisine===cuisineFilter);if(courseFilter!=='All')r=r.filter(x=>(x.course||'Main')===courseFilter);if(sort==='recent')r.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));if(sort==='cooked')r.sort((a,b)=>(b.cookCount||0)-(a.cookCount||0));if(sort==='name')r.sort((a,b)=>a.name.localeCompare(b.name));return r;},[recipes,search,cuisineFilter,courseFilter,sort]);
-  if(recipes.length===0)return(<div className="text-center py-20"><ChefHat className="w-12 h-12 text-stone-300 mx-auto mb-4" strokeWidth={1.25}/><h2 className="font-display text-3xl mb-2">Your library is empty</h2><p className="text-stone-600 mb-6">Add your first recipe.</p><button onClick={onAdd} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-stone-900 text-stone-50"><Plus className="w-4 h-4"/> Add a recipe</button></div>);
+  if(showAdd)return(<div><button onClick={()=>setShowAdd(false)} className="flex items-center gap-1.5 text-sm text-stone-600 mb-6 hover:text-stone-900"><ChevronLeft className="w-4 h-4"/> Back to library</button><AddRecipeView onSave={handleSave}/></div>);
+  if(recipes.length===0)return(<div className="text-center py-20"><ChefHat className="w-12 h-12 text-stone-300 mx-auto mb-4" strokeWidth={1.25}/><h2 className="font-display text-3xl mb-2">Your library is empty</h2><p className="text-stone-600 mb-6">Add your first recipe.</p><button onClick={handleAdd} className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-stone-900 text-stone-50"><Plus className="w-4 h-4"/> Add a recipe</button></div>);
   const vc=['All',...COURSES.filter(c=>courseCounts[c]>0||c===courseFilter)];
   return(
     <div>
@@ -697,6 +701,7 @@ function LibraryView({recipes,onSelect,onAdd,onImport}){
         <div className="flex items-center gap-2">
           {importError&&<span className="text-xs text-red-600">{importError}</span>}
           <span className="text-sm text-stone-500">{filtered.length} of {recipes.length}</span>
+          <button onClick={handleAdd} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800"><Plus className="w-3.5 h-3.5"/> Add</button>
           <button onClick={()=>importRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-stone-200 bg-white text-sm text-stone-600 hover:border-stone-400"><Upload className="w-3.5 h-3.5"/><span className="hidden sm:inline">Import</span></button>
           <button onClick={()=>exportRecipes(recipes.reduce((acc,r)=>({...acc,[r.id]:r}),{}))} disabled={recipes.length===0} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-stone-200 bg-white text-sm text-stone-600 hover:border-stone-400 disabled:opacity-40"><Download className="w-3.5 h-3.5"/><span className="hidden sm:inline">Export</span></button>
         </div>
@@ -1358,7 +1363,6 @@ export default function App(){
   const tabs=[
     {id:'home',label:'Home',icon:Home},
     {id:'library',label:'Library',icon:BookOpen},
-    {id:'add',label:'Add Recipe',icon:Plus},
     {id:'week',label:'This Week',icon:Calendar},
     {id:'grocery',label:'Grocery',icon:ShoppingCart},
     {id:'insights',label:'Insights',icon:Sparkles,badge:unreviewedCount>0},
@@ -1380,7 +1384,6 @@ export default function App(){
           <div className="flex items-center gap-3">
             <SyncBadge status={syncStatus} lastSynced={lastSynced} onSync={manualSync}/>
             <span className="text-xs text-stone-400 hidden sm:inline">{recipeList.length} {recipeList.length===1?'recipe':'recipes'}</span>
-            <button onClick={()=>setShowQuickLog(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800"><Zap className="w-3.5 h-3.5"/><span className="hidden sm:inline">Quick log</span></button>
           </div>
         </div>
         <nav className="hidden sm:flex max-w-6xl mx-auto px-5 pb-3 gap-1 overflow-x-auto">
@@ -1415,8 +1418,7 @@ export default function App(){
           onSaveRecipe={saveRecipe}
           onPlanMeal={planMeal}
         />}
-        {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
-        {view==='add'&&<AddRecipeView onSave={recipe=>{saveRecipe(recipe);setView('library');}}/>}
+        {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>{}} onSave={recipe=>{saveRecipe(recipe);}} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
         {view==='week'&&<WeekPlanView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} cookedSlots={state.cookedSlots[currentWeek]||{}} onPickSlot={(d,m)=>setPlanTarget({week:currentWeek,day:d,meal:m})} onClearSlot={(d,m)=>planMeal(currentWeek,d,m,null)} onSelectRecipe={id=>setSelectedRecipeId(id)} onMarkCooked={(d,m,rid,c)=>markSlotCooked(currentWeek,d,m,rid,c)} onSetMultiplier={(d,m,mul)=>setSlotMultiplier(currentWeek,d,m,mul)} onCopyLastWeek={copyLastWeekPlan}/>}
         {view==='grocery'&&<GroceryView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} setCurrentWeek={setCurrentWeek} pantry={state.pantry} checks={state.groceryChecks[currentWeek]||{}} manualItems={state.manualGrocery[currentWeek]||[]} onToggleCheck={k=>toggleGroceryCheck(currentWeek,k)} onAddManualItem={item=>addManualGroceryItem(currentWeek,item)} onRemoveManualItem={id=>removeManualGroceryItem(currentWeek,id)} categoryOrder={state.groceryCategoryOrder||CATEGORIES} onReorderCategories={reorderGroceryCategories} onAddToPantry={togglePantry}/>}
         {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory} onClearAllMealHistory={clearAllMealHistory} onClearInsights={clearInsights}/>}
