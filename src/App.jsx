@@ -1,5 +1,5 @@
 // ============================================================
-// MealChat.jsx  —  AI meal planning chat for Mise Home tab
+// MealChat.jsx  -  AI meal planning chat for Mise Home tab
 // Drop this file into src/ alongside App.jsx, then follow
 // the integration instructions at the bottom of this file.
 // ============================================================
@@ -40,7 +40,7 @@ function buildContextBlock(recipes, mealPlan, mealHistory, currentWeek, weekPrep
   const todayKey   = getTodayDayKeyLocal();
   const weekPlan   = mealPlan[currentWeek] || {};
 
-  // Recipe library — names + cuisine + cook time
+  // Recipe library - names + cuisine + cook time
   const recipeSummaries = Object.values(recipes).map(r =>
     `"${r.name}" (${r.cuisine || '?'}, ${(r.prepTime||0)+(r.cookTime||0)}min, id:${r.id})`
   );
@@ -59,7 +59,7 @@ function buildContextBlock(recipes, mealPlan, mealHistory, currentWeek, weekPrep
     return `  ${DAYS_LABEL[dk]}: ${meals.join(' | ')}`;
   });
 
-  // Meal history (last 60 days) — eating-out rate
+  // Meal history (last 60 days) - eating-out rate
   const cutoff     = Date.now() - 60 * 86400000;
   const recent     = (mealHistory || []).filter(h => h.date >= cutoff);
   const outCount   = recent.filter(h => h.slotType === 'eating_out').length;
@@ -81,7 +81,7 @@ ${planLines.join('\n')}
 RECENT MEAL HISTORY (last 60 days, eating out ${outPct}% of meals):
 ${recentMeals.slice(-20).join('\n') || 'No history'}
 
-WEEKLY PREP GUIDE: ${weekPrepGuide && !weekPrepGuide.empty && !weekPrepGuide.error ? 'Exists — ' + (weekPrepGuide.intro || '') : 'None generated'}
+WEEKLY PREP GUIDE: ${weekPrepGuide && !weekPrepGuide.empty && !weekPrepGuide.error ? 'Exists - ' + (weekPrepGuide.intro || '') : 'None generated'}
 `.trim();
 }
 
@@ -377,16 +377,16 @@ function ChatMessage({
 
 /**
  * Props:
- *   recipes       — state.recipes (object keyed by id)
- *   recipeList    — array form of recipes
- *   mealPlan      — state.mealPlan
- *   mealHistory   — state.mealHistory
- *   currentWeek   — current week ISO string (getWeekStart())
- *   weekPrepGuide — state.weekPrepGuide
- *   onApplyWeekPlan(weekKey, newPlan) — write AI plan to mealPlan state
- *   onAddMealHistory(entry)           — log a meal
- *   onSaveRecipe(recipe)              — save a new recipe draft
- *   onStartCooking(recipeId)          — trigger cooking mode for a recipe
+ *   recipes       - state.recipes (object keyed by id)
+ *   recipeList    - array form of recipes
+ *   mealPlan      - state.mealPlan
+ *   mealHistory   - state.mealHistory
+ *   currentWeek   - current week ISO string (getWeekStart())
+ *   weekPrepGuide - state.weekPrepGuide
+ *   onApplyWeekPlan(weekKey, newPlan) - write AI plan to mealPlan state
+ *   onAddMealHistory(entry)           - log a meal
+ *   onSaveRecipe(recipe)              - save a new recipe draft
+ *   onStartCooking(recipeId)          - trigger cooking mode for a recipe
  */
 export function MealChat({
   recipes,
@@ -457,12 +457,12 @@ ${context}
 
 USER REQUEST: "${trimmed}"
 
-Generate a full 7-day meal plan (Monday–Sunday) using recipes from the library above.
-Prefer variety — avoid repeating the same recipe more than twice.
+Generate a full 7-day meal plan (Monday-Sunday) using recipes from the library above.
+Prefer variety - avoid repeating the same recipe more than twice.
 You may include "eating out" slots (1-2 per week max unless the user asks for more).
-Respond ONLY with valid JSON in this exact shape — no markdown, no extra text:
+Respond ONLY with valid JSON in this exact shape - no markdown, no extra text:
 {
-  "message": "brief friendly intro (1–2 sentences)",
+  "message": "brief friendly intro (1-2 sentences)",
   "plan": {
     "mon": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" },
     "tue": { ... },
@@ -477,7 +477,7 @@ Respond ONLY with valid JSON in this exact shape — no markdown, no extra text:
 For eating-out slots use: { "slotType": "eating_out", "label": "Restaurant night" }
 For empty/skipped slots use: null
 Use recipe IDs exactly as shown in the library (the id: values after each recipe name).
-If the library has fewer than 7*3 recipes, reuse some or leave nulls — don't invent recipes.
+If the library has fewer than 7*3 recipes, reuse some or leave nulls - don't invent recipes.
 `.trim();
 
         const raw  = await callAI(prompt, { smart: true, maxTokens: 2000 });
@@ -490,7 +490,7 @@ If the library has fewer than 7*3 recipes, reuse some or leave nulls — don't i
 
         updateMessage(replyId, {
           loading:   false,
-          text:      data.message || 'Here's a plan for the week — swap any slot you'd like to change.',
+          text:      data.message || "Here's a plan for the week - swap any slot you'd like to change.",
           draftPlan: msgDraftPlan,
         });
 
@@ -811,7 +811,7 @@ If you mention specific recipes from their library, end with: RECIPE_LINKS: ["id
 //
 // 5. In HomeView, add `mealHistory`, `onApplyWeekPlan`, `onAddMealHistory`,
 //    `onSaveRecipe` to the destructured props and render MealChat
-//    somewhere in the return — right before the "This week" dot grid
+//    somewhere in the return - right before the "This week" dot grid
 //    is a good spot:
 //
 //    <MealChat
