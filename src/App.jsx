@@ -24,7 +24,6 @@ const DAYS = [
   {key:'thu',label:'Thursday'},{key:'fri',label:'Friday'},{key:'sat',label:'Saturday'},{key:'sun',label:'Sunday'}
 ];
 const MEALS = ['breakfast','lunch','dinner'];
-const SLOT_TYPES = ['recipe','leftover','eating_out'];
 
 const DEFAULT_STATE = {
   recipes:{}, mealPlan:{}, cookedSlots:{}, manualGrocery:{}, groceryChecks:{},
@@ -32,7 +31,7 @@ const DEFAULT_STATE = {
   settings:{defaultServings:4},
   cookLog:{},
   mealHistory:[],
-  groceryCategoryOrder: [...CATEGORIES], // Feature: draggable order
+  groceryCategoryOrder: [...CATEGORIES],
 };
 
 // ---------- Utilities ----------
@@ -65,16 +64,15 @@ const GPI={egg:56,onion:150,garlic:5,tomato:120,potato:213,carrot:60,apple:180,l
 function lookupBySub(table,name){const n=(name||'').toLowerCase().trim();if(!n)return null;if(table[n]!=null)return table[n];const keys=Object.keys(table).sort((a,b)=>b.length-a.length);for(const k of keys){if(n.includes(k))return table[k];}return null;}
 function ingredientToGrams(ing){if(!ing)return null;if(typeof ing.grams==='number'&&ing.grams>0)return ing.grams;const qty=ing.quantity;if(!qty||qty<=0)return null;const unit=(ing.unit||'').toLowerCase().trim();if(GPW[unit]!=null)return qty*GPW[unit];if(VTC[unit]!=null){const cups=qty*VTC[unit];const d=lookupBySub(GPC,ing.name);return d!=null?cups*d:null;}if(!unit){const ig=lookupBySub(GPI,ing.name);return ig!=null?qty*ig:null;}return null;}
 function formatGrams(g){if(g==null||isNaN(g))return null;return g<10?`${Math.round(g*10)/10}g`:`${Math.round(g)}g`;}
-// Unit abbreviations — applied everywhere units are displayed
 const UNIT_ABBR={'tablespoon':'tbsp','tablespoons':'tbsp','teaspoon':'tsp','teaspoons':'tsp','ounce':'oz','ounces':'oz','pound':'lb','pounds':'lb','gram':'g','grams':'g','kilogram':'kg','kilograms':'kg','milliliter':'ml','milliliters':'ml','liter':'L','liters':'L','fluid ounce':'fl oz','fluid ounces':'fl oz','package':'pkg','packages':'pkg','slice':'sl','slices':'sl','clove':'clv','cloves':'clv','inch':'in','inches':'in'};
 function abbreviateUnit(u){if(!u)return'';const l=u.toLowerCase().trim();return UNIT_ABBR[l]||u;}
 function fmtUnit(qty,unit){return`${formatQuantity(qty)}${abbreviateUnit(unit)?' '+abbreviateUnit(unit):''}`.trim();}
-
 function extractJSON(text){let clean=text.replace(/```json\s*/gi,'').replace(/```/g,'').trim();const am=clean.match(/\[[\s\S]*\]/),om=clean.match(/\{[\s\S]*\}/);if(am&&(!om||am.index<om.index))clean=am[0];else if(om)clean=om[0];return JSON.parse(clean);}
 
 // ---------- API ----------
+// FIX: correct model strings
 async function callAI(prompt,options={}){
-  const model = options.smart ? 'claude-sonnet-4-20250514' : 'claude-haiku-4-5-20251001';
+  const model=options.smart?'claude-sonnet-4-6':'claude-haiku-4-5-20251001';
   const body={model,max_tokens:2000,messages:[{role:'user',content:prompt}]};
   if(options.tools)body.tools=options.tools;
   if(options.imageData)body.messages=[{role:'user',content:[{type:'image',source:{type:'base64',media_type:options.imageType,data:options.imageData}},{type:'text',text:prompt}]}];
@@ -86,7 +84,6 @@ async function callAI(prompt,options={}){
 async function syncRead(){const r=await fetch(`${SERVER_URL}/data`);if(r.status===404)return null;if(!r.ok)throw new Error(`Sync read error ${r.status}`);return r.json();}
 async function syncWrite(data){const r=await fetch(`${SERVER_URL}/data`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});if(!r.ok)throw new Error(`Sync write error ${r.status}`);}
 
-// ---------- Export/Import ----------
 function exportRecipes(recipes){const data=JSON.stringify({version:1,exportedAt:new Date().toISOString(),recipes},null,2);const blob=new Blob([data],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`mise-recipes-${new Date().toISOString().split('T')[0]}.json`;a.click();URL.revokeObjectURL(url);}
 function importRecipesFromFile(file,onImport,onError){const reader=new FileReader();reader.onload=e=>{try{const raw=JSON.parse(e.target.result);const recipes=raw.recipes||raw;if(typeof recipes!=='object'||Array.isArray(recipes))throw new Error('Bad format');onImport(recipes);}catch{onError('Could not read that file.');}};reader.readAsText(file);}
 
@@ -101,7 +98,6 @@ function useAppState(){
   const[syncError,setSyncError]=useState(null);
   const[lastSynced,setLastSynced]=useState(null);
   const saveTimer=useRef(null);
-
   useEffect(()=>{
     (async()=>{
       setSyncStatus('syncing');
@@ -118,7 +114,6 @@ function useAppState(){
       setLoaded(true);
     })();
   },[]);
-
   useEffect(()=>{
     if(!loaded)return;
     if(saveTimer.current)clearTimeout(saveTimer.current);
@@ -130,17 +125,14 @@ function useAppState(){
     },2000);
     return()=>clearTimeout(saveTimer.current);
   },[state,loaded]);
-
   async function manualSync(){
     setSyncStatus('syncing');setSyncError(null);
     try{const remote=await syncRead();if(remote){const merged={...DEFAULT_STATE,...remote};setState(merged);localStorage.setItem(STORAGE_KEY,JSON.stringify(merged));}setLastSynced(Date.now());setSyncStatus('synced');}
     catch(e){setSyncError(e.message);setSyncStatus('error');}
   }
-
   return[state,setState,loaded,setLoaded,syncStatus,syncError,lastSynced,manualSync];
 }
 
-// ---------- SyncBadge ----------
 function SyncBadge({status,lastSynced,onSync}){
   const ago=lastSynced?(()=>{const m=Math.floor((Date.now()-lastSynced)/60000);if(m<1)return'just now';if(m===1)return'1m ago';if(m<60)return`${m}m ago`;return`${Math.floor(m/60)}h ago`;})():null;
   if(status==='syncing')return<div className="flex items-center gap-1.5 text-xs text-stone-500"><Loader2 className="w-3.5 h-3.5 animate-spin text-orange-600"/><span className="hidden sm:inline">Syncing…</span></div>;
@@ -149,7 +141,6 @@ function SyncBadge({status,lastSynced,onSync}){
   return<button onClick={onSync} className="flex items-center gap-1.5 text-xs text-stone-400 hover:text-stone-600"><RefreshCw className="w-3.5 h-3.5"/><span className="hidden sm:inline">Sync</span></button>;
 }
 
-// ---------- Loading Screen ----------
 function LoadingScreen({onSkip}){
   const[elapsed,setElapsed]=useState(0);
   useEffect(()=>{const t=setInterval(()=>setElapsed(e=>e+1),1000);return()=>clearInterval(t);},[]);
@@ -164,7 +155,6 @@ function LoadingScreen({onSkip}){
   );
 }
 
-// ---------- Modal ----------
 function Modal({children,onClose,wide}){
   useEffect(()=>{const h=e=>{if(e.key==='Escape')onClose();};window.addEventListener('keydown',h);return()=>window.removeEventListener('keydown',h);},[onClose]);
   return(
@@ -177,11 +167,6 @@ function Modal({children,onClose,wide}){
   );
 }
 
-// ============================================================
-// FEATURE 1: NUTRITION ESTIMATES
-// ============================================================
-
-// Stored on recipe as recipe.nutrition = {calories, protein, carbs, fat, fiber, perServing: true}
 function NutritionBadge({nutrition}){
   if(!nutrition)return null;
   return(
@@ -194,26 +179,19 @@ function NutritionBadge({nutrition}){
   );
 }
 
-function NutritionSection({recipe, onSave}){
+function NutritionSection({recipe,onSave}){
   const[loading,setLoading]=useState(false);
   const[error,setError]=useState(null);
   const n=recipe.nutrition;
-
   async function estimate(){
     setLoading(true);setError(null);
     try{
       const ings=(recipe.ingredients||[]).map(i=>`${formatQuantity(i.quantity)} ${i.unit} ${i.name}`.trim()).join(', ');
-      const result=extractJSON(await callAI(
-        `Estimate nutrition for this recipe per serving (${recipe.servings||4} servings total).
-Ingredients: ${ings}
-Return ONLY JSON: {"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"perServing":true}
-Use realistic values. If you can't estimate an ingredient, make a reasonable assumption.`
-      ));
-      onSave({...recipe, nutrition:result});
+      const result=extractJSON(await callAI(`Estimate nutrition for this recipe per serving (${recipe.servings||4} servings total).\nIngredients: ${ings}\nReturn ONLY JSON: {"calories":number,"protein":number,"carbs":number,"fat":number,"fiber":number,"perServing":true}\nUse realistic values.`));
+      onSave({...recipe,nutrition:result});
     }catch(e){setError('Could not estimate. Try again.');}
     finally{setLoading(false);}
   }
-
   if(!n)return(
     <div className="flex items-center gap-3">
       <button onClick={estimate} disabled={loading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-stone-200 text-sm text-stone-600 hover:border-orange-400 hover:text-orange-700 disabled:opacity-50">
@@ -223,14 +201,11 @@ Use realistic values. If you can't estimate an ingredient, make a reasonable ass
       {error&&<span className="text-xs text-red-600">{error}</span>}
     </div>
   );
-
   return(
     <div className="bg-stone-50 border border-stone-200 rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs uppercase tracking-wider text-stone-500 font-medium flex items-center gap-1.5"><Activity className="w-3.5 h-3.5"/> Nutrition per serving</p>
-        <button onClick={estimate} disabled={loading} className="text-xs text-stone-400 hover:text-orange-700 flex items-center gap-1">
-          {loading?<Loader2 className="w-3 h-3 animate-spin"/>:<RefreshCw className="w-3 h-3"/>} Refresh
-        </button>
+        <button onClick={estimate} disabled={loading} className="text-xs text-stone-400 hover:text-orange-700 flex items-center gap-1">{loading?<Loader2 className="w-3 h-3 animate-spin"/>:<RefreshCw className="w-3 h-3"/>} Refresh</button>
       </div>
       <div className="grid grid-cols-5 gap-2">
         {[['Calories',n.calories,'bg-orange-50 text-orange-700'],['Protein',n.protein,'bg-blue-50 text-blue-700'],['Carbs',n.carbs,'bg-amber-50 text-amber-700'],['Fat',n.fat,'bg-rose-50 text-rose-700'],['Fiber',n.fiber,'bg-emerald-50 text-emerald-700']].map(([label,val,cls])=>(
@@ -245,17 +220,14 @@ Use realistic values. If you can't estimate an ingredient, make a reasonable ass
   );
 }
 
-// ============================================================
-// FEATURE 2: HOME / "COOK TONIGHT" DASHBOARD
-// ============================================================
-
-function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, onQuickLog, onSaveRecipeGuide, onPrepWeek}){
+function HomeView({recipes,mealPlan,currentWeek,onSelectRecipe,onGoToWeek,onQuickLog,onSaveRecipeGuide,onPrepWeek}){
   const today=getTodayDayKey();
   const weekPlan=mealPlan[currentWeek]||{};
   const todayPlan=weekPlan[today]||{};
-  const[cookingMode,setCookingMode]=useState(null); // {recipe, step}
+  const[cookingMode,setCookingMode]=useState(null);
+  const[prepGuide,setPrepGuide]=useState(null);
+  const[showIngredients,setShowIngredients]=useState(false);
 
-  // Get today's meals
   const todayMeals=MEALS.map(m=>{
     const slot=normalizeSlot(todayPlan[m]);
     if(!slot)return{meal:m,slot:null,recipe:null};
@@ -263,44 +235,26 @@ function HomeView({recipes, mealPlan, currentWeek, onSelectRecipe, onGoToWeek, o
     const recipe=slot.recipeId?recipes[slot.recipeId]:null;
     return{meal:m,slot,recipe};
   });
-
   const nextUncooked=todayMeals.find(({recipe,slot,isEatingOut})=>recipe&&slot&&!isEatingOut);
   const todayDate=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});
 
-  // Prep guide + cook mode
-  const[prepGuide,setPrepGuide]=useState(null); // {recipe, guide, loading, isMealPrep, multiplier}
-  const[showIngredients,setShowIngredients]=useState(false);
-
   async function startCooking(recipe,isMealPrep=false){
     const multiplier=isMealPrep?(()=>{
-      // find week plan multiplier for this recipe
       const week=mealPlan[currentWeek]||{};
       for(const d of DAYS){const dp=week[d.key]||{};for(const m of MEALS){const s=normalizeSlot(dp[m]);if(s?.recipeId===recipe.id)return s.multiplier||1;}}
       return 1;
     })():1;
     const cachedGuide=isMealPrep?recipe.mealPrepGuide:recipe.prepGuide;
     setPrepGuide({recipe,guide:cachedGuide||null,loading:!cachedGuide,isMealPrep,multiplier});
-    if(!recipe.prepGuide){
+    if(!cachedGuide){
       try{
         const ings=(recipe.ingredients||[]).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ');
-        const steps=(recipe.instructions||[]).map((s,i)=>`${i+1}. ${s}`).join('
-');
+        const steps=(recipe.instructions||[]).map((s,i)=>`${i+1}. ${s}`).join('\n');
         const prompt=isMealPrep
-          ?`You are a meal prep coach. For batch cooking this recipe (${multiplier}x servings), give an optimized parallel-task prep guide.
-Recipe: ${recipe.name}
-Ingredients: ${ings}
-Steps:
-${steps}
-Return ONLY JSON: {"overview":"string (1-2 sentences on the plan)","phases":[{"phase":"string (e.g. First - 5 min)","tasks":["string"],"canDoAhead":"boolean","aheadTiming":"string or null"}],"storageNotes":"string"}`
-          :`You are a cooking coach. Analyze this recipe and identify what can be prepped ahead of time vs what must be done during cooking.
-Recipe: ${recipe.name}
-Ingredients: ${ings}
-Steps:
-${steps}
-Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhead":[{"what":"string","relatedSteps":[number],"howFarAhead":"string (e.g. up to 3 days, 1 hour before, morning of)","tip":"string"}],"cookingNotes":"string (any key tips for the actual cook)"}`;
+          ?`You are a meal prep coach. For batch cooking this recipe (${multiplier}x servings), give an optimized parallel-task prep guide.\nRecipe: ${recipe.name}\nIngredients: ${ings}\nSteps:\n${steps}\nReturn ONLY JSON: {"overview":"string","phases":[{"phase":"string","tasks":["string"],"canDoAhead":true,"aheadTiming":"string or null"}],"storageNotes":"string"}`
+          :`You are a cooking coach. Analyze this recipe and identify what can be prepped ahead of time.\nRecipe: ${recipe.name}\nIngredients: ${ings}\nSteps:\n${steps}\nReturn ONLY JSON: {"overview":"string","prepAhead":[{"what":"string","relatedSteps":[number],"howFarAhead":"string","tip":"string"}],"cookingNotes":"string"}`;
         const result=extractJSON(await callAI(prompt,{smart:true}));
         setPrepGuide(g=>({...g,guide:result,loading:false}));
-        // cache on recipe
         if(onSaveRecipeGuide)onSaveRecipeGuide(recipe.id,result,isMealPrep);
       }catch(e){setPrepGuide(g=>({...g,loading:false,error:'Could not generate prep guide.'}));}
     }
@@ -378,7 +332,6 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
           <span className="font-display text-5xl text-orange-100 font-medium mb-3">{stepIdx+1}.</span>
           <p className="text-stone-800 text-lg leading-relaxed">{step}</p>
         </div>
-        {/* Collapsible ingredient reference */}
         <div className="mb-4 bg-white border border-stone-200 rounded-2xl overflow-hidden">
           <button onClick={()=>setShowIngredients(v=>!v)} className="w-full flex items-center justify-between px-4 py-3 text-sm text-stone-600 hover:bg-stone-50">
             <span className="flex items-center gap-2"><Package className="w-3.5 h-3.5"/> All ingredients ({allIngs.length})</span>
@@ -407,13 +360,10 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
 
   return(
     <div>
-      {/* Header */}
       <div className="mb-6">
         <p className="text-sm text-stone-500 mb-1">{todayDate}</p>
         <h2 className="font-display text-4xl tracking-tight">Good {new Date().getHours()<12?'morning':new Date().getHours()<17?'afternoon':'evening'}</h2>
       </div>
-
-      {/* Today's plan */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-display text-lg">Today's meals</h3>
@@ -447,8 +397,6 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
           ))}
         </div>
       </div>
-
-      {/* Cook tonight CTA */}
       {nextUncooked&&(
         <div className="bg-orange-50 border border-orange-200 rounded-2xl p-5 mb-4">
           <p className="text-xs uppercase tracking-wider text-orange-600 font-medium mb-1">Cook tonight</p>
@@ -457,7 +405,7 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
             {((nextUncooked.recipe.prepTime||0)+(nextUncooked.recipe.cookTime||0))}m total · {nextUncooked.recipe.servings} servings
             {nextUncooked.recipe.nutrition&&<> · ~{Math.round(nextUncooked.recipe.nutrition.calories)} cal/serving</>}
           </p>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button onClick={()=>startCooking(nextUncooked.recipe,false)} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-orange-700 text-white text-sm hover:bg-orange-800">
               <Play className="w-4 h-4 fill-current"/> Start cooking
             </button>
@@ -470,8 +418,6 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
           </div>
         </div>
       )}
-
-      {/* Prep this week */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
         <h3 className="font-display text-lg mb-1">Prep this week</h3>
         <p className="text-sm text-stone-500 mb-3">See what can be made ahead across all this week's recipes.</p>
@@ -479,24 +425,18 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
           <ListOrdered className="w-4 h-4"/> Weekly prep guide
         </button>
       </div>
-      {/* Quick log */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4">
-        <div className="flex items-center justify-between mb-1">
-          <h3 className="font-display text-lg">Log a meal</h3>
-        </div>
+        <h3 className="font-display text-lg mb-1">Log a meal</h3>
         <p className="text-sm text-stone-500 mb-3">Ate something not on the plan? Log it quick.</p>
         <button onClick={onQuickLog} className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-stone-900 text-stone-50 text-sm hover:bg-stone-800">
           <Zap className="w-4 h-4"/> Quick log
         </button>
       </div>
-
-      {/* Week at a glance */}
       <div className="bg-white border border-stone-200 rounded-2xl p-5">
         <h3 className="font-display text-lg mb-3">This week</h3>
         <div className="grid grid-cols-7 gap-1">
           {DAYS.map(d=>{
             const dp=weekPlan[d.key]||{};
-            const filled=MEALS.filter(m=>dp[m]).length;
             const isToday=d.key===today;
             return(
               <button key={d.key} onClick={onGoToWeek} className={`flex flex-col items-center gap-1 p-2 rounded-xl ${isToday?'bg-orange-50 border border-orange-200':'hover:bg-stone-50'}`}>
@@ -516,7 +456,6 @@ Return ONLY JSON: {"overview":"string (1 sentence summary of the cook)","prepAhe
   );
 }
 
-// ---------- RecipeCard ----------
 function RecipeCard({recipe,onClick}){
   const tt=(recipe.prepTime||0)+(recipe.cookTime||0);
   return(
@@ -540,26 +479,22 @@ function RecipeCard({recipe,onClick}){
   );
 }
 
-// ---------- RecipeForm ----------
 function RecipeForm({initial,onSave,onCancel,onDelete}){
   const[recipe,setRecipe]=useState(()=>initial||{name:'',servings:4,prepTime:15,cookTime:30,cuisine:'American',course:'Main',tags:[],ingredients:[{name:'',quantity:1,unit:'',category:'produce'}],instructions:[''],source:'',notes:''});
   const[generatingPhoto,setGeneratingPhoto]=useState(false);
   const u=(f,v)=>setRecipe(r=>({...r,[f]:v}));
   const ui=(i,f,v)=>setRecipe(r=>{const a=[...r.ingredients];a[i]={...a[i],[f]:v};return{...r,ingredients:a};});
   const un=(i,v)=>setRecipe(r=>{const a=[...r.instructions];a[i]=v;return{...r,instructions:a};});
-
   async function generatePhoto(){
     if(!recipe.name.trim())return;
     setGeneratingPhoto(true);
     try{
-      const desc=await callAI(`For the dish "${recipe.name}" (${recipe.cuisine||''}), give me a single short phrase (3-6 words, no quotes) suitable as an Unsplash photo search for a beautiful food photography image of this dish. Reply with ONLY the phrase.`);
+      const desc=await callAI(`For the dish "${recipe.name}" (${recipe.cuisine||''}), give me a single short phrase (3-6 words, no quotes) suitable as an Unsplash photo search. Reply with ONLY the phrase.`);
       const query=encodeURIComponent(desc.trim().slice(0,80));
-      const photoUrl=`https://source.unsplash.com/800x500/?${query},food,dish`;
-      u('photoUrl',photoUrl);
+      u('photoUrl',`https://source.unsplash.com/800x500/?${query},food,dish`);
     }catch(e){console.error('Photo gen failed',e);}
     finally{setGeneratingPhoto(false);}
   }
-
   function handleSave(){if(!recipe.name.trim()){alert('Recipe needs a name.');return;}onSave({...recipe,ingredients:recipe.ingredients.filter(i=>i.name.trim()),instructions:recipe.instructions.filter(s=>s.trim())});}
   const ic='w-full px-3 py-2 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500';
   const lc='text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block';
@@ -578,7 +513,7 @@ function RecipeForm({initial,onSave,onCancel,onDelete}){
           </div>
         ):(
           <button type="button" onClick={generatePhoto} disabled={generatingPhoto||!recipe.name.trim()} className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-dashed border-stone-300 text-sm text-stone-500 hover:border-orange-400 hover:text-orange-700 disabled:opacity-50 w-full justify-center">
-            {generatingPhoto?<><Loader2 className="w-4 h-4 animate-spin"/> Generating photo…</>:<><ImageIcon className="w-4 h-4"/> Auto-generate photo with AI</>}
+            {generatingPhoto?<><Loader2 className="w-4 h-4 animate-spin"/> Generating…</>:<><ImageIcon className="w-4 h-4"/> Auto-generate photo</>}
           </button>
         )}
       </div>
@@ -613,25 +548,23 @@ function RecipeForm({initial,onSave,onCancel,onDelete}){
   );
 }
 
-// ---------- Add inputs ----------
 function PasteInput({onParsed}){
   const[text,setText]=useState('');const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
-  async function parse(){if(!text.trim())return;setLoading(true);setError(null);try{onParsed(extractJSON(await callAI(`${SCHEMA}\n\nParse this recipe. If it has sections (e.g. "Make the sauce", "For the stir fry", "Assembly"), prepend each section's steps with that header in the instruction text, e.g. "Make the sauce: Heat oil in a pan..." so context is preserved.\n\n${text}`)));}catch(e){setError(e.message);}finally{setLoading(false);}}
+  async function parse(){if(!text.trim())return;setLoading(true);setError(null);try{onParsed(extractJSON(await callAI(`${SCHEMA}\n\nParse this recipe. If it has sections (e.g. "Make the sauce"), prepend each section's steps with that header, e.g. "Make the sauce: Heat oil..."\n\n${text}`)));}catch(e){setError(e.message);}finally{setLoading(false);}}
   return(<div className="bg-white border border-stone-200 rounded-2xl p-6"><textarea value={text} onChange={e=>setText(e.target.value)} rows={10} placeholder="Paste recipe text here..." className="w-full px-3 py-3 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 resize-none mb-3"/>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}<button onClick={parse} disabled={!text.trim()||loading} className="px-5 py-2 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<Sparkles className="w-4 h-4"/>}{loading?'Parsing…':'Parse recipe'}</button></div>);
 }
 function URLInput({onParsed}){
   const[url,setUrl]=useState('');const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
-  async function parse(){if(!url.trim())return;setLoading(true);setError(null);try{const fetchRes=await fetch(`${SERVER_URL}/fetch-url`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});if(!fetchRes.ok)throw new Error(`Could not fetch that URL`);const{text}=await fetchRes.json();const r=extractJSON(await callAI(`Extract the recipe from this webpage content. If it has sections (e.g. "Make the sauce", "For the stir fry", "Assembly"), prepend each section's steps with that header in the instruction text, e.g. "Make the sauce: Heat oil in a pan..." so context is preserved.\n\n${text}\n\nReturn ONLY JSON. ${SCHEMA}`));r.source=url;onParsed(r);}catch(e){setError(e.message);}finally{setLoading(false);}}
+  async function parse(){if(!url.trim())return;setLoading(true);setError(null);try{const fetchRes=await fetch(`${SERVER_URL}/fetch-url`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});if(!fetchRes.ok)throw new Error('Could not fetch that URL');const{text}=await fetchRes.json();const r=extractJSON(await callAI(`Extract the recipe from this webpage. If it has sections prepend each step with that section header.\n\n${text}\n\nReturn ONLY JSON. ${SCHEMA}`));r.source=url;onParsed(r);}catch(e){setError(e.message);}finally{setLoading(false);}}
   return(<div className="bg-white border border-stone-200 rounded-2xl p-6"><input value={url} onChange={e=>setUrl(e.target.value)} placeholder="https://..." className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-3"/>{error&&<p className="text-sm text-red-600 mb-3">{error}</p>}<button onClick={parse} disabled={!url.trim()||loading} className="px-5 py-2 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<LinkIcon className="w-4 h-4"/>}{loading?'Fetching…':'Fetch recipe'}</button><p className="text-xs text-stone-400 mt-3">This can take 10–20 seconds.</p></div>);
 }
 function PhotoInput({onParsed}){
   const[imageData,setImageData]=useState(null);const[imageType,setImageType]=useState(null);const[preview,setPreview]=useState(null);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);const fileRef=useRef(null);
   function handleFile(e){const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=()=>{const res=r.result;setImageData(res.split(',')[1]);setImageType(f.type);setPreview(res);};r.readAsDataURL(f);}
-  async function parse(){if(!imageData)return;setLoading(true);setError(null);try{onParsed(extractJSON(await callAI(`Extract the recipe from this image. If the recipe has sections (e.g. "Make the sauce", "For the stir fry", "Assembly"), prepend each section's steps with that header in the instruction text, e.g. "Make the sauce: Heat oil in a pan..." so context is preserved. ${SCHEMA}`,{imageData,imageType})));}catch(e){setError(e.message);}finally{setLoading(false);}}
+  async function parse(){if(!imageData)return;setLoading(true);setError(null);try{onParsed(extractJSON(await callAI(`Extract the recipe from this image. If it has sections prepend each step with that section header. ${SCHEMA}`,{imageData,imageType})));}catch(e){setError(e.message);}finally{setLoading(false);}}
   return(<div className="bg-white border border-stone-200 rounded-2xl p-6"><input ref={fileRef} type="file" accept="image/*" onChange={handleFile} className="hidden"/>{!preview&&<button onClick={()=>fileRef.current?.click()} className="w-full py-12 border-2 border-dashed border-stone-300 rounded-xl text-stone-500 flex flex-col items-center gap-2"><Upload className="w-6 h-6" strokeWidth={1.5}/><span className="text-sm">Tap to upload a photo</span></button>}{preview&&<div className="space-y-3"><img src={preview} alt="recipe" className="w-full max-h-80 object-contain rounded-lg border border-stone-200"/><div className="flex gap-2"><button onClick={()=>fileRef.current?.click()} className="px-4 py-2 rounded-full text-sm text-stone-600 hover:bg-stone-100">Change photo</button><button onClick={parse} disabled={loading} className="px-5 py-2 rounded-full bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-2">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<Sparkles className="w-4 h-4"/>}{loading?'Reading…':'Extract recipe'}</button></div></div>}{error&&<p className="text-sm text-red-600 mt-3">{error}</p>}</div>);
 }
 
-// ---------- Add Recipe View ----------
 function AddRecipeView({onSave}){
   const[method,setMethod]=useState('form');const[draft,setDraft]=useState(null);
   if(draft)return(<div><div className="flex items-center justify-between mb-6"><h2 className="font-display text-4xl tracking-tight">Review recipe</h2><button onClick={()=>setDraft(null)} className="text-sm text-stone-600 flex items-center gap-1"><ChevronLeft className="w-4 h-4"/> Start over</button></div><RecipeForm initial={draft} onSave={onSave} onCancel={()=>setDraft(null)}/></div>);
@@ -648,7 +581,6 @@ function AddRecipeView({onSave}){
   );
 }
 
-// ---------- Library ----------
 function LibraryView({recipes,onSelect,onAdd,onImport}){
   const[search,setSearch]=useState('');const[cuisineFilter,setCuisineFilter]=useState('');const[courseFilter,setCourseFilter]=useState('All');const[sort,setSort]=useState('recent');const[importError,setImportError]=useState(null);const importRef=useRef(null);
   const courseCounts=useMemo(()=>{const c={All:recipes.length};for(const x of COURSES)c[x]=0;for(const r of recipes){const x=r.course||'Main';c[x]=(c[x]||0)+1;}return c;},[recipes]);
@@ -678,7 +610,6 @@ function LibraryView({recipes,onSelect,onAdd,onImport}){
   );
 }
 
-// ---------- WeekPlanView ----------
 function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,onPickSlot,onClearSlot,onSelectRecipe,onMarkCooked,onSetMultiplier}){
   const week=mealPlan[currentWeek]||{};
   const dkm=['sun','mon','tue','wed','thu','fri','sat'];
@@ -723,9 +654,7 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
         <h2 className="font-display text-4xl tracking-tight">This week</h2>
         <div className="flex items-center gap-2">
           <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,-1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronLeft className="w-5 h-5"/></button>
-          <div className="text-center">
-            <p className="font-display text-lg font-medium leading-tight">{formatWeekRange(currentWeek)}</p>
-          </div>
+          <p className="font-display text-lg font-medium">{formatWeekRange(currentWeek)}</p>
           <button onClick={()=>setCurrentWeek(shiftWeek(currentWeek,1))} className="p-2 rounded-full hover:bg-stone-200/60 text-stone-600"><ChevronRight className="w-5 h-5"/></button>
         </div>
         <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100">Today</button>
@@ -736,7 +665,6 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
   );
 }
 
-// ---------- Recipe Picker ----------
 function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,onPick,onPickLeftover,onPickEatingOut,onClose}){
   const[search,setSearch]=useState('');const[mode,setMode]=useState('library');const[eoLabel,setEoLabel]=useState('');
   const filtered=recipes.filter(r=>!search.trim()||r.name.toLowerCase().includes(search.toLowerCase()));
@@ -748,14 +676,11 @@ function RecipePickerModal({recipes,recipeMap,title,currentWeekPlan,targetSlot,o
       <div className="flex gap-1 mb-4 p-1 bg-stone-100 rounded-full overflow-x-auto">{modes.map(md=><button key={md.id} onClick={()=>setMode(md.id)} className={`flex-1 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap ${mode===md.id?'bg-white text-stone-900 shadow-sm':'text-stone-600'}`}>{md.label}</button>)}</div>
       {mode==='library'&&<><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search recipes..." className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500 mb-4"/><div className="max-h-96 overflow-y-auto space-y-1">{filtered.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No recipes match.</p>}{filtered.map(r=><button key={r.id} onClick={()=>onPick(r.id)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100 flex items-center justify-between"><div><div className="font-display text-base">{r.name}</div><div className="text-xs text-stone-500">{r.cuisine} · {((r.prepTime||0)+(r.cookTime||0))}m{r.nutrition?` · ${Math.round(r.nutrition.calories)} cal`:''}</div></div>{r.rating==='up'&&<ThumbsUp className="w-3.5 h-3.5 text-emerald-600" fill="currentColor"/>}</button>)}</div></>}
       {mode==='leftover'&&<div className="max-h-96 overflow-y-auto space-y-1">{origins.length===0&&<p className="text-sm text-stone-500 py-6 text-center">No cooked meals this week to use as leftovers.</p>}{origins.map(o=>{const r=recipeMap[o.recipeId];if(!r)return null;return(<button key={`${o.day}_${o.meal}`} onClick={()=>onPickLeftover(o.day,o.meal)} className="w-full text-left p-3 rounded-lg hover:bg-stone-100"><div className="text-[10px] uppercase tracking-wider text-stone-500">{o.dayLabel} · {o.meal}</div><div className="font-display text-base">{r.name}</div></button>);})}</div>}
-      {mode==='eating_out'&&<div className="space-y-4"><div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl"><UtensilsCrossed className="w-6 h-6 text-amber-600 flex-shrink-0" strokeWidth={1.5}/><div><p className="text-sm font-medium text-amber-900">Eating out</p><p className="text-xs text-amber-700">Mark this slot as a restaurant meal</p></div></div><div><label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Label (optional)</label><input value={eoLabel} onChange={e=>setEoLabel(e.target.value)} placeholder="e.g. Date night, Tacos, Birthday dinner…" className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500" onKeyDown={e=>e.key==='Enter'&&onPickEatingOut(eoLabel||'Eating out')}/></div><button onClick={()=>onPickEatingOut(eoLabel||'Eating out')} className="w-full py-2.5 rounded-full bg-amber-600 text-white text-sm hover:bg-amber-700 flex items-center justify-center gap-2"><UtensilsCrossed className="w-4 h-4"/> Set as eating out</button></div>}
+      {mode==='eating_out'&&<div className="space-y-4"><div className="flex items-center gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl"><UtensilsCrossed className="w-6 h-6 text-amber-600 flex-shrink-0" strokeWidth={1.5}/><div><p className="text-sm font-medium text-amber-900">Eating out</p><p className="text-xs text-amber-700">Mark this slot as a restaurant meal</p></div></div><div><label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">Label (optional)</label><input value={eoLabel} onChange={e=>setEoLabel(e.target.value)} placeholder="e.g. Date night, Tacos…" className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500" onKeyDown={e=>e.key==='Enter'&&onPickEatingOut(eoLabel||'Eating out')}/></div><button onClick={()=>onPickEatingOut(eoLabel||'Eating out')} className="w-full py-2.5 rounded-full bg-amber-600 text-white text-sm hover:bg-amber-700 flex items-center justify-center gap-2"><UtensilsCrossed className="w-4 h-4"/> Set as eating out</button></div>}
     </Modal>
   );
 }
 
-// ============================================================
-// FEATURE 3: DRAGGABLE GROCERY CATEGORY ORDER
-// ============================================================
 function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,manualItems,onToggleCheck,onAddManualItem,onRemoveManualItem,categoryOrder,onReorderCategories}){
   const[showAdd,setShowAdd]=useState(false);
   const[newItem,setNewItem]=useState({name:'',quantity:1,unit:'',category:'other'});
@@ -763,14 +688,7 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
   const[editingOrder,setEditingOrder]=useState(false);
   const dragItem=useRef(null);
   const dragOver=useRef(null);
-
-  const orderedCats=useMemo(()=>{
-    const order=categoryOrder||CATEGORIES;
-    // ensure all categories present
-    const missing=CATEGORIES.filter(c=>!order.includes(c));
-    return[...order,...missing];
-  },[categoryOrder]);
-
+  const orderedCats=useMemo(()=>{const order=categoryOrder||CATEGORIES;const missing=CATEGORIES.filter(c=>!order.includes(c));return[...order,...missing];},[categoryOrder]);
   const grocery=useMemo(()=>{
     const week=mealPlan[currentWeek]||{},agg={};
     for(const day of DAYS){const dp=week[day.key]||{};for(const meal of MEALS){const slot=normalizeSlot(dp[meal]);if(!slot||slot.leftoverFrom||slot.slotType==='eating_out')continue;const rid=slot.recipeId;if(!rid)continue;const rec=recipes[rid];if(!rec)continue;const mul=slot.multiplier||1;for(const ing of rec.ingredients||[]){const n=normalizeIngredientName(ing.name);if(pantry.some(p=>normalizeIngredientName(p)===n))continue;const key=`${n}|${(ing.unit||'').toLowerCase()}`;const qty=(ing.quantity||0)*mul;if(agg[key])agg[key].quantity+=qty;else agg[key]={key,name:ing.name,quantity:qty,unit:ing.unit||'',category:ing.category||'other',manual:false};}}}
@@ -779,33 +697,14 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
     for(const c of Object.keys(bc))bc[c].sort((a,b)=>a.name.localeCompare(b.name));
     return bc;
   },[recipes,mealPlan,currentWeek,pantry,manualItems]);
-
   const ti=Object.values(grocery).reduce((s,i)=>s+i.length,0),cc=Object.keys(checks).length;
-
-  // Drag handlers for category reorder
   function handleDragStart(e,idx){dragItem.current=idx;e.dataTransfer.effectAllowed='move';}
   function handleDragEnter(idx){dragOver.current=idx;}
-  function handleDragEnd(){
-    if(dragItem.current===null||dragOver.current===null||dragItem.current===dragOver.current){dragItem.current=null;dragOver.current=null;return;}
-    const newOrder=[...orderedCats];const[moved]=newOrder.splice(dragItem.current,1);newOrder.splice(dragOver.current,0,moved);
-    onReorderCategories(newOrder);dragItem.current=null;dragOver.current=null;
-  }
-
-  function buildShareText(){
-    const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${ti} items\n`];
-    for(const cat of orderedCats.filter(c=>grocery[c]?.length>0)){lines.push(`${cat.toUpperCase()}`);for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${fmtUnit(item.quantity,item.unit)} ${item.name}`);}lines.push('');}
-    return lines.join('\n').trim();
-  }
-  async function shareList(){
-    const text=buildShareText();
-    if(navigator.share){try{await navigator.share({title:'Mise grocery list',text});setShareStatus('shared');}catch(e){if(e.name!=='AbortError')fallbackCopy(text);}}else{fallbackCopy(text);}
-    setTimeout(()=>setShareStatus(null),2500);
-  }
+  function handleDragEnd(){if(dragItem.current===null||dragOver.current===null||dragItem.current===dragOver.current){dragItem.current=null;dragOver.current=null;return;}const newOrder=[...orderedCats];const[moved]=newOrder.splice(dragItem.current,1);newOrder.splice(dragOver.current,0,moved);onReorderCategories(newOrder);dragItem.current=null;dragOver.current=null;}
+  function buildShareText(){const lines=[`🛒 Grocery list — ${formatWeekRange(currentWeek)}`,`${ti} items\n`];for(const cat of orderedCats.filter(c=>grocery[c]?.length>0)){lines.push(`${cat.toUpperCase()}`);for(const item of grocery[cat]){const checked=!!checks[item.key];lines.push(`${checked?'✓':'-'} ${fmtUnit(item.quantity,item.unit)} ${item.name}`);}lines.push('');}return lines.join('\n').trim();}
+  async function shareList(){const text=buildShareText();if(navigator.share){try{await navigator.share({title:'Mise grocery list',text});setShareStatus('shared');}catch(e){if(e.name!=='AbortError')fallbackCopy(text);}}else{fallbackCopy(text);}setTimeout(()=>setShareStatus(null),2500);}
   function fallbackCopy(text){navigator.clipboard.writeText(text).then(()=>setShareStatus('copied')).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);setShareStatus('copied');});}
   function handleAdd(){if(!newItem.name.trim())return;onAddManualItem({name:newItem.name.trim(),quantity:newItem.quantity||1,unit:newItem.unit.trim(),category:newItem.category});setNewItem({name:'',quantity:1,unit:'',category:'other'});setShowAdd(false);}
-
-  const activeCats=orderedCats.filter(c=>grocery[c]?.length>0);
-
   return(
     <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -817,72 +716,22 @@ function GroceryView({recipes,mealPlan,currentWeek,setCurrentWeek,pantry,checks,
           <button onClick={()=>setCurrentWeek(getWeekStart())} className="px-3 py-1.5 rounded-full text-sm border border-stone-200 text-stone-600 hover:bg-stone-100">Today</button>
         </div>
       </div>
-
-      {/* Action bar */}
       <div className="flex items-center gap-2 mb-4 flex-wrap">
         {ti>0&&<button onClick={shareList} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors ${shareStatus==='shared'||shareStatus==='copied'?'bg-emerald-50 text-emerald-700 border border-emerald-200':'bg-white border border-stone-200 text-stone-600 hover:border-stone-400'}`}>{shareStatus==='shared'?<><Check className="w-4 h-4" strokeWidth={3}/> Shared!</>:shareStatus==='copied'?<><Check className="w-4 h-4" strokeWidth={3}/> Copied!</>:<><Share2 className="w-4 h-4"/> Share list</>}</button>}
         {ti>0&&<button onClick={()=>setEditingOrder(e=>!e)} className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm transition-colors ${editingOrder?'bg-stone-900 text-white':'bg-white border border-stone-200 text-stone-600 hover:border-stone-400'}`}><ListOrdered className="w-4 h-4"/> {editingOrder?'Done':'Reorder sections'}</button>}
       </div>
-
-      {/* Category order editor */}
       {editingOrder&&(
         <div className="bg-white border border-stone-200 rounded-2xl p-4 mb-4">
-          <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-3">Drag to reorder — matches your store layout</p>
-          <div className="space-y-1">
-            {orderedCats.map((cat,idx)=>(
-              <div
-                key={cat}
-                draggable
-                onDragStart={e=>handleDragStart(e,idx)}
-                onDragEnter={()=>handleDragEnter(idx)}
-                onDragEnd={handleDragEnd}
-                onDragOver={e=>e.preventDefault()}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-grab active:cursor-grabbing select-none ${grocery[cat]?.length>0?'bg-stone-50 border border-stone-200':'opacity-40'}`}
-              >
-                <GripVertical className="w-4 h-4 text-stone-400 flex-shrink-0"/>
-                <span className="text-sm capitalize flex-1">{cat}</span>
-                {grocery[cat]?.length>0&&<span className="text-xs text-stone-400">{grocery[cat].length} item{grocery[cat].length!==1?'s':''}</span>}
-              </div>
-            ))}
-          </div>
+          <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-3">Drag to reorder — match your store layout</p>
+          <div className="space-y-1">{orderedCats.map((cat,idx)=>(<div key={cat} draggable onDragStart={e=>handleDragStart(e,idx)} onDragEnter={()=>handleDragEnter(idx)} onDragEnd={handleDragEnd} onDragOver={e=>e.preventDefault()} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-grab active:cursor-grabbing select-none ${grocery[cat]?.length>0?'bg-stone-50 border border-stone-200':'opacity-40'}`}><GripVertical className="w-4 h-4 text-stone-400 flex-shrink-0"/><span className="text-sm capitalize flex-1">{cat}</span>{grocery[cat]?.length>0&&<span className="text-xs text-stone-400">{grocery[cat].length} item{grocery[cat].length!==1?'s':''}</span>}</div>))}</div>
         </div>
       )}
-
-      <div className="mb-4">
-        {!showAdd?<button onClick={()=>setShowAdd(true)} className="text-sm text-orange-700 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> Add an item</button>
-        :(<div className="bg-white border border-stone-200 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-12 gap-2"><input type="number" step="0.25" min="0" value={newItem.quantity} onChange={e=>setNewItem({...newItem,quantity:parseFloat(e.target.value)||0})} placeholder="qty" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.unit} onChange={e=>setNewItem({...newItem,unit:e.target.value})} placeholder="unit" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.name} onChange={e=>setNewItem({...newItem,name:e.target.value})} onKeyDown={e=>e.key==='Enter'&&handleAdd()} placeholder="item name" autoFocus className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-2 sm:col-span-4"/><select value={newItem.category} onChange={e=>setNewItem({...newItem,category:e.target.value})} className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-1 sm:col-span-2">{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><button onClick={handleAdd} disabled={!newItem.name.trim()} className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-sm disabled:opacity-50 sm:col-span-1">Add</button><button onClick={()=>{setShowAdd(false);setNewItem({name:'',quantity:1,unit:'',category:'other'});}} className="text-stone-400 hover:text-stone-700 sm:col-span-1 flex items-center justify-center"><X className="w-4 h-4"/></button></div>)}
-      </div>
-
-      {ti===0?(
-        <div className="bg-white border border-stone-200 rounded-2xl p-10 text-center"><ShoppingCart className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><p className="text-stone-600">Your list is empty.</p></div>
-      ):(
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {orderedCats.filter(c=>grocery[c]?.length>0).map(cat=>(
-            <div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5">
-              <h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3>
-              <div className="space-y-1">
-                {grocery[cat].map(item=>{
-                  const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;
-                  return(
-                    <div key={item.key} className="flex items-center">
-                      <button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left">
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div>
-                        <span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span>
-                      </button>
-                      {item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="mb-4">{!showAdd?<button onClick={()=>setShowAdd(true)} className="text-sm text-orange-700 flex items-center gap-1"><Plus className="w-3.5 h-3.5"/> Add an item</button>:(<div className="bg-white border border-stone-200 rounded-xl p-3 grid grid-cols-2 sm:grid-cols-12 gap-2"><input type="number" step="0.25" min="0" value={newItem.quantity} onChange={e=>setNewItem({...newItem,quantity:parseFloat(e.target.value)||0})} placeholder="qty" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.unit} onChange={e=>setNewItem({...newItem,unit:e.target.value})} placeholder="unit" className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm sm:col-span-2"/><input value={newItem.name} onChange={e=>setNewItem({...newItem,name:e.target.value})} onKeyDown={e=>e.key==='Enter'&&handleAdd()} placeholder="item name" autoFocus className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-2 sm:col-span-4"/><select value={newItem.category} onChange={e=>setNewItem({...newItem,category:e.target.value})} className="px-2 py-1.5 bg-stone-50 border border-stone-200 rounded-md text-sm col-span-1 sm:col-span-2">{CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}</select><button onClick={handleAdd} disabled={!newItem.name.trim()} className="px-3 py-1.5 rounded-md bg-stone-900 text-white text-sm disabled:opacity-50 sm:col-span-1">Add</button><button onClick={()=>{setShowAdd(false);setNewItem({name:'',quantity:1,unit:'',category:'other'});}} className="text-stone-400 hover:text-stone-700 sm:col-span-1 flex items-center justify-center"><X className="w-4 h-4"/></button></div>)}</div>
+      {ti===0?(<div className="bg-white border border-stone-200 rounded-2xl p-10 text-center"><ShoppingCart className="w-10 h-10 text-stone-300 mx-auto mb-3" strokeWidth={1.25}/><p className="text-stone-600">Your list is empty.</p></div>):(<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{orderedCats.filter(c=>grocery[c]?.length>0).map(cat=>(<div key={cat} className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3 capitalize text-orange-800">{cat}</h3><div className="space-y-1">{grocery[cat].map(item=>{const checked=!!checks[item.key],ig=ingredientToGrams({quantity:item.quantity,unit:item.unit,name:item.name}),gl=ig!=null?formatGrams(ig):null;return(<div key={item.key} className="flex items-center"><button onClick={()=>onToggleCheck(item.key)} className="flex-1 flex items-center gap-3 py-1.5 px-2 rounded-md hover:bg-stone-50 text-left"><div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${checked?'bg-emerald-700 border-emerald-700':'border-stone-300'}`}>{checked&&<Check className="w-3 h-3 text-white" strokeWidth={3}/>}</div><span className={`text-sm flex-1 ${checked?'line-through text-stone-400':'text-stone-800'}`}><span className="font-medium">{fmtUnit(item.quantity,item.unit)}</span>{' '}{item.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></button>{item.manual&&<button onClick={()=>onRemoveManualItem(item.manualId)} className="p-1.5 text-stone-300 hover:text-red-600"><X className="w-3.5 h-3.5"/></button>}</div>);})}</div></div>))}</div>)}
     </div>
   );
 }
 
-// ---------- Cook Review ----------
 function CookReviewCard({recipe,onClose,onSave}){
   const[rating,setRating]=useState(null);const[notes,setNotes]=useState('');
   function submit(){onSave(recipe.id,{date:Date.now(),rating,notes:notes.trim()});onClose();}
@@ -896,7 +745,6 @@ function CookReviewCard({recipe,onClose,onSave}){
   );
 }
 
-// ---------- Quick Log ----------
 function QuickLogModal({onClose,onLog,recipes}){
   const[text,setText]=useState('');const[loading,setLoading]=useState(false);const[parsed,setParsed]=useState(null);const[day,setDay]=useState('today');const[meal,setMeal]=useState('dinner');
   async function handleParse(){if(!text.trim())return;setLoading(true);try{const result=await callAI(`Given this free-text meal log: "${text}"\nIdentify: 1) Is this a known recipe from: [${recipes.map(r=>r.name).join(', ').slice(0,300)}]? If so, return the EXACT recipe name as "matchedRecipe".\n2) Otherwise, return a short label for "label" (max 5 words).\nReturn ONLY JSON: {"matchedRecipe": "string or null", "label": "string"}`);setParsed(extractJSON(result));}catch(e){setParsed({matchedRecipe:null,label:text.trim()});}setLoading(false);}
@@ -907,7 +755,7 @@ function QuickLogModal({onClose,onLog,recipes}){
       <div className="flex items-center gap-2 mb-4"><Zap className="w-5 h-5 text-orange-700"/><h3 className="font-display text-2xl">Quick log</h3></div>
       <p className="text-sm text-stone-600 mb-4">What did you eat? We'll match it to your library or log it free-form.</p>
       <div className="space-y-3">
-        <div className="flex gap-2"><input autoFocus value={text} onChange={e=>{setText(e.target.value);setParsed(null);}} onKeyDown={e=>e.key==='Enter'&&!parsed&&handleParse()} placeholder="e.g. made a sandwich, chicken tacos, spaghetti…" className="flex-1 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500"/>{!parsed&&<button onClick={handleParse} disabled={!text.trim()||loading} className="px-4 py-2 rounded-lg bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-1.5">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<Sparkles className="w-4 h-4"/>}</button>}</div>
+        <div className="flex gap-2"><input autoFocus value={text} onChange={e=>{setText(e.target.value);setParsed(null);}} onKeyDown={e=>e.key==='Enter'&&!parsed&&handleParse()} placeholder="e.g. made a sandwich, chicken tacos…" className="flex-1 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500"/>{!parsed&&<button onClick={handleParse} disabled={!text.trim()||loading} className="px-4 py-2 rounded-lg bg-stone-900 text-stone-50 text-sm disabled:opacity-50 flex items-center gap-1.5">{loading?<Loader2 className="w-4 h-4 animate-spin"/>:<Sparkles className="w-4 h-4"/>}</button>}</div>
         {parsed&&<div className="p-3 bg-stone-50 border border-stone-200 rounded-lg">{parsed.matchedRecipe?<p className="text-sm">Matched to: <span className="font-medium text-emerald-700">{parsed.matchedRecipe}</span></p>:<p className="text-sm">Log as: <span className="font-medium">{parsed.label}</span></p>}</div>}
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-1.5 block">When</label><select value={day} onChange={e=>setDay(e.target.value)} className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none">{dayOptions.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select></div>
@@ -919,16 +767,13 @@ function QuickLogModal({onClose,onLog,recipes}){
   );
 }
 
-// ---------- Meal History ----------
 function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry}){
   const cutoff=Date.now()-30*24*60*60*1000;
   const recent=(mealHistory||[]).filter(h=>h.date>cutoff).sort((a,b)=>b.date-a.date);
   const[editingId,setEditingId]=useState(null);
   const[editForm,setEditForm]=useState({});
-
   function startEdit(h){setEditingId(h.id);setEditForm({label:h.label||h.text||'',meal:h.meal||'dinner'});}
   function saveEdit(){onEditEntry(editingId,editForm);setEditingId(null);}
-
   if(recent.length===0)return(<div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-2 flex items-center gap-2"><History className="w-4 h-4 text-stone-500"/> Meal history</h3><p className="text-sm text-stone-500">No meals logged yet. Use quick log or mark meals as cooked.</p></div>);
   const byDate={};for(const h of recent){const d=new Date(h.date).toLocaleDateString('en-US',{month:'short',day:'numeric',weekday:'short'});if(!byDate[d])byDate[d]=[];byDate[d].push(h);}
   return(
@@ -943,9 +788,7 @@ function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry}){
               <div key={i} className="bg-stone-100 rounded-xl p-3 space-y-2">
                 <input value={editForm.label} onChange={e=>setEditForm(f=>({...f,label:e.target.value}))} className="w-full px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none"/>
                 <div className="flex gap-2">
-                  <select value={editForm.meal} onChange={e=>setEditForm(f=>({...f,meal:e.target.value}))} className="px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none flex-1">
-                    {MEALS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}
-                  </select>
+                  <select value={editForm.meal} onChange={e=>setEditForm(f=>({...f,meal:e.target.value}))} className="px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none flex-1">{MEALS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}</select>
                   <button onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-stone-900 text-white text-xs">Save</button>
                   <button onClick={()=>setEditingId(null)} className="px-3 py-1.5 rounded-lg border border-stone-200 text-xs text-stone-600">Cancel</button>
                 </div>
@@ -970,7 +813,6 @@ function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry}){
   );
 }
 
-// ---------- Insights ----------
 function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistory,onDeleteMealHistory}){
   const[suggestions,setSuggestions]=useState([]);const[loading,setLoading]=useState(false);const[error,setError]=useState(null);
   const stats=useMemo(()=>{const total=recipes.length,ctm=recipes.filter(r=>r.lastCooked&&(Date.now()-r.lastCooked)/86400000<=30).length;const cc={},ic={};let tct=0,tr=0;for(const r of recipes){cc[r.cuisine||'Other']=(cc[r.cuisine||'Other']||0)+1;for(const ing of r.ingredients||[]){const n=normalizeIngredientName(ing.name);ic[n]=(ic[n]||0)+1;}const t=(r.prepTime||0)+(r.cookTime||0);if(t>0){tct+=t;tr++;}}return{total,cookedThisMonth:ctm,cuisineRanked:Object.entries(cc).sort((a,b)=>b[1]-a[1]),ingredientRanked:Object.entries(ic).sort((a,b)=>b[1]-a[1]).slice(0,10),topRated:recipes.filter(r=>r.rating==='up').slice(0,5),mostCooked:[...recipes].sort((a,b)=>(b.cookCount||0)-(a.cookCount||0)).filter(r=>r.cookCount>0).slice(0,5),avgTime:tr?Math.round(tct/tr):0};},[recipes]);
@@ -993,13 +835,11 @@ function InsightsView({recipes,onSaveRecipe,mealHistory,cookLog,onEditMealHistor
 
 function StatCard({label,value}){return(<div className="bg-white border border-stone-200 rounded-2xl p-4"><div className="text-xs uppercase tracking-wider text-stone-500 mb-1">{label}</div><div className="font-display text-3xl font-medium">{value}</div></div>);}
 
-// ---------- Pantry ----------
 function PantryView({pantry,onToggle}){
   const[input,setInput]=useState('');
   return(<div><h2 className="font-display text-4xl tracking-tight mb-2">Pantry staples</h2><p className="text-stone-600 text-sm mb-6">Items here are excluded from your grocery list.</p><div className="bg-white border border-stone-200 rounded-2xl p-5 mb-4"><div className="flex gap-2"><input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(onToggle(input),setInput(''))} placeholder="e.g. soy sauce" className="flex-1 px-3 py-2 bg-stone-50 border border-stone-200 rounded-lg text-sm focus:outline-none focus:border-stone-500"/><button onClick={()=>{if(input.trim()){onToggle(input);setInput('');}}} className="px-4 py-2 rounded-lg bg-stone-900 text-stone-50 text-sm">Add</button></div></div><div className="bg-white border border-stone-200 rounded-2xl p-5"><h3 className="font-display text-lg mb-3">{pantry.length} staples</h3><div className="flex flex-wrap gap-2">{pantry.map(item=><button key={item} onClick={()=>onToggle(item)} className="text-sm px-3 py-1 bg-stone-100 text-stone-700 rounded-full hover:bg-red-50 hover:text-red-700 flex items-center gap-1.5">{item}<X className="w-3 h-3 opacity-50"/></button>)}</div></div></div>);
 }
 
-// ---------- Recipe Detail Modal ----------
 function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDuplicate,onSaveCookLog,onSaveRecipe}){
   const tt=(recipe.prepTime||0)+(recipe.cookTime||0),lct=recipe.lastCooked?new Date(recipe.lastCooked).toLocaleDateString('en-US',{month:'short',day:'numeric'}):null;
   const bs=recipe.servings||4;const[srv,setSrv]=useState(bs);const scale=bs?srv/bs:1;const[copied,setCopied]=useState(false);const[showReview,setShowReview]=useState(false);
@@ -1019,7 +859,10 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
       {recipe.photoUrl&&<div className="w-full h-56 overflow-hidden rounded-xl mb-5 -mt-1"><img src={recipe.photoUrl} alt={recipe.name} className="w-full h-full object-cover"/></div>}
       <div className="flex items-start justify-between mb-4 gap-3">
         <div className="flex-1"><div className="text-xs uppercase tracking-wider text-orange-700 mb-1">{recipe.cuisine}{recipe.course&&recipe.course!=='Main'&&<span className="text-stone-400"> · {recipe.course}</span>}</div><h2 className="font-display text-3xl font-medium leading-tight">{recipe.name}</h2>{recipe.notes&&<p className="text-sm text-stone-600 italic mt-2">{recipe.notes}</p>}</div>
-        <div className="flex gap-1"><button onClick={onDuplicate} title="Duplicate recipe" className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Copy className="w-4 h-4"/></button><button onClick={onEdit} className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Edit2 className="w-4 h-4"/></button></div>
+        <div className="flex gap-1 mr-8">
+          <button onClick={onDuplicate} title="Duplicate" className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Copy className="w-4 h-4"/></button>
+          <button onClick={onEdit} className="p-2 rounded-full hover:bg-stone-100 text-stone-600"><Edit2 className="w-4 h-4"/></button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm text-stone-600 border-y border-stone-100 py-3 mb-5 items-center">
         {tt>0&&<span className="flex items-center gap-1.5"><Clock className="w-3.5 h-3.5"/> {tt}m total</span>}
@@ -1031,7 +874,6 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
         <div className="md:col-span-2"><h3 className="font-display text-lg mb-2">Ingredients</h3><ul className="space-y-1">{(recipe.ingredients||[]).map((ing,i)=>{const bg=ingredientToGrams(ing),sg=bg!=null?bg*scale:null,gl=sg!=null?formatGrams(sg):null;return(<li key={i} className="text-sm text-stone-700 flex"><span className="font-medium text-stone-900 w-20 flex-shrink-0">{fmtUnit(ing.quantity*scale,ing.unit)}</span><span className="flex-1">{ing.name}{gl&&<span className="text-stone-400 ml-1.5 text-xs">({gl})</span>}</span></li>);})}</ul></div>
         <div className="md:col-span-3"><h3 className="font-display text-lg mb-2">Instructions</h3><ol className="space-y-3">{(recipe.instructions||[]).map((step,i)=><li key={i} className="text-sm text-stone-700 flex gap-3"><span className="font-display text-lg text-orange-700 w-6 flex-shrink-0">{i+1}.</span><span className="leading-relaxed">{step}</span></li>)}</ol></div>
       </div>
-      {/* Nutrition section */}
       <div className="mb-5"><NutritionSection recipe={recipe} onSave={onSaveRecipe}/></div>
       {(recipe.tags||[]).length>0&&<div className="flex flex-wrap gap-1.5 mb-5">{recipe.tags.map(t=><span key={t} className="text-xs px-2 py-0.5 bg-stone-100 text-stone-600 rounded-full">{t}</span>)}</div>}
       {recipe.source&&<p className="text-xs text-stone-500 mb-5">Source: {recipe.source}</p>}
@@ -1049,9 +891,6 @@ function RecipeDetailModal({recipe,onClose,onEdit,onDelete,onCook,onRate,onDupli
 
 function EditRecipeModal({recipe,onSave,onCancel,onDelete}){return(<Modal onClose={onCancel} wide><h2 className="font-display text-2xl mb-4">Edit recipe</h2><RecipeForm initial={recipe} onSave={onSave} onCancel={onCancel} onDelete={onDelete}/></Modal>);}
 
-// ============================================================
-// MAIN APP
-// ============================================================
 export default function App(){
   const[state,setState,loaded,setLoaded,syncStatus,syncError,lastSynced,manualSync]=useAppState();
   const[view,setView]=useState('home');
@@ -1060,7 +899,9 @@ export default function App(){
   const[planTarget,setPlanTarget]=useState(null);
   const[currentWeek,setCurrentWeek]=useState(getWeekStart());
   const[showQuickLog,setShowQuickLog]=useState(false);
-  const[pendingReview,setPendingReview]=useState(null);
+  const[weekPrepModal,setWeekPrepModal]=useState(false);
+  const[weekPrepGuide,setWeekPrepGuide]=useState(null);
+  const[weekPrepLoading,setWeekPrepLoading]=useState(false);
 
   const recipes=state.recipes;
   const recipeList=useMemo(()=>Object.values(recipes),[recipes]);
@@ -1071,28 +912,27 @@ export default function App(){
     return count;
   },[recipeList,state.cookLog]);
 
-  function saveRecipe(recipe){
-    const id=recipe.id||generateId(),now=Date.now(),existing=recipes[id];
-    setState(s=>({...s,recipes:{...s.recipes,[id]:{cookCount:0,lastCooked:null,rating:null,createdAt:now,...existing,...recipe,id}}}));
-    return id;
-  }
+  function saveRecipe(recipe){const id=recipe.id||generateId(),now=Date.now(),existing=recipes[id];setState(s=>({...s,recipes:{...s.recipes,[id]:{cookCount:0,lastCooked:null,rating:null,createdAt:now,...existing,...recipe,id}}}));return id;}
   function deleteRecipe(id){setState(s=>{const{[id]:_,...rest}=s.recipes;return{...s,recipes:rest};});}
-  function logCook(id){
-    setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],cookCount:(s.recipes[id].cookCount||0)+1,lastCooked:Date.now()}}}));
-    const recipe=recipes[id];if(recipe)addMealHistory({date:Date.now(),recipeId:id,label:recipe.name,meal:'dinner',slotType:'recipe'});
-  }
+  function logCook(id){setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],cookCount:(s.recipes[id].cookCount||0)+1,lastCooked:Date.now()}}}));const recipe=recipes[id];if(recipe)addMealHistory({date:Date.now(),recipeId:id,label:recipe.name,meal:'dinner',slotType:'recipe'});}
   function setRating(id,rating){setState(s=>({...s,recipes:{...s.recipes,[id]:{...s.recipes[id],rating}}}));}
-  function saveRecipeGuide(recipeId,guide,isMealPrep){
-    setState(s=>({...s,recipes:{...s.recipes,[recipeId]:{...s.recipes[recipeId],[isMealPrep?'mealPrepGuide':'prepGuide']:guide}}}));
+  function saveRecipeGuide(recipeId,guide,isMealPrep){setState(s=>({...s,recipes:{...s.recipes,[recipeId]:{...s.recipes[recipeId],[isMealPrep?'mealPrepGuide':'prepGuide']:guide}}}));}
+  function duplicateRecipe(id){const orig=recipes[id];if(!orig)return;const newId=generateId();setState(s=>({...s,recipes:{...s.recipes,[newId]:{...orig,id:newId,name:`${orig.name} (copy)`,createdAt:Date.now(),cookCount:0,lastCooked:null,rating:null}}}));return newId;}
+  function saveCookLog(recipeId,logEntry){setState(s=>{const prev=s.cookLog||{};const entries=prev[recipeId]||[];return{...s,cookLog:{...prev,[recipeId]:[...entries,logEntry]}};});}
+  function addMealHistory(entry){setState(s=>({...s,mealHistory:[...(s.mealHistory||[]),{...entry,id:generateId()}]}));}
+  function editMealHistory(id,updates){setState(s=>({...s,mealHistory:(s.mealHistory||[]).map(h=>h.id===id?{...h,...updates}:h)}));}
+  function deleteMealHistory(id,recipeId){
+    setState(s=>{
+      let rs=s.recipes;
+      if(recipeId&&rs[recipeId])rs={...rs,[recipeId]:{...rs[recipeId],cookCount:Math.max(0,(rs[recipeId].cookCount||1)-1)}};
+      return{...s,mealHistory:(s.mealHistory||[]).filter(h=>h.id!==id),recipes:rs};
+    });
   }
-
-  const[weekPrepModal,setWeekPrepModal]=useState(false);
-  const[weekPrepGuide,setWeekPrepGuide]=useState(null);
-  const[weekPrepLoading,setWeekPrepLoading]=useState(false);
+  function reorderGroceryCategories(newOrder){setState(s=>({...s,groceryCategoryOrder:newOrder}));}
 
   async function generateWeekPrepGuide(){
     setWeekPrepModal(true);
-    if(weekPrepGuide)return; // already generated
+    if(weekPrepGuide)return;
     setWeekPrepLoading(true);
     try{
       const week=state.mealPlan[currentWeek]||{};
@@ -1100,37 +940,15 @@ export default function App(){
       for(const d of DAYS){const dp=week[d.key]||{};for(const m of MEALS){const s=normalizeSlot(dp[m]);if(s?.recipeId&&!s.leftoverFrom)recipeIds.add(s.recipeId);}}
       const weekRecipes=[...recipeIds].map(id=>recipes[id]).filter(Boolean);
       if(!weekRecipes.length){setWeekPrepGuide({empty:true});setWeekPrepLoading(false);return;}
-      const recipeSummaries=weekRecipes.map(r=>`${r.name}: ${(r.ingredients||[]).slice(0,6).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ')}`).join('
-');
+      const recipeSummaries=weekRecipes.map(r=>`${r.name}: ${(r.ingredients||[]).slice(0,6).map(i=>`${fmtUnit(i.quantity,i.unit)} ${i.name}`).join(', ')}`).join('\n');
       const result=extractJSON(await callAI(
-        `You are a meal prep planner. Given this week's recipes, create a smart prep schedule for Sunday that minimizes effort throughout the week.
-Week's recipes:
-${recipeSummaries}
-Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"string (e.g. Sunday evening, Monday morning)","tasks":[{"recipe":"string","task":"string","duration":"string","storedUntil":"string"}]}]}`,
+        `You are a meal prep planner. Given this week's recipes, create a smart prep schedule for Sunday that minimizes effort throughout the week.\nWeek's recipes:\n${recipeSummaries}\nReturn ONLY JSON: {"intro":"string","days":[{"day":"string","tasks":[{"recipe":"string","task":"string","duration":"string","storedUntil":"string"}]}]}`,
         {smart:true}
       ));
       setWeekPrepGuide(result);
     }catch(e){setWeekPrepGuide({error:'Could not generate guide. Try again.'});}
     finally{setWeekPrepLoading(false);}
   }
-
-  function duplicateRecipe(id){const orig=recipes[id];if(!orig)return;const newId=generateId();const copy={...orig,id:newId,name:`${orig.name} (copy)`,createdAt:Date.now(),cookCount:0,lastCooked:null,rating:null};setState(s=>({...s,recipes:{...s.recipes,[newId]:copy}}));return newId;}
-  function saveCookLog(recipeId,logEntry){setState(s=>{const prev=s.cookLog||{};const entries=prev[recipeId]||[];return{...s,cookLog:{...prev,[recipeId]:[...entries,logEntry]}};});}
-  function addMealHistory(entry){setState(s=>{const hist=(s.mealHistory||[]);return{...s,mealHistory:[...hist,{...entry,id:generateId()}]};});}
-  function editMealHistory(id,updates){setState(s=>({...s,mealHistory:(s.mealHistory||[]).map(h=>h.id===id?{...h,...updates}:h)}));}
-  function deleteMealHistory(id,recipeId){
-    setState(s=>{
-      const entry=(s.mealHistory||[]).find(h=>h.id===id);
-      // Un-log cook count if this entry was a recipe match
-      let recipes=s.recipes;
-      if(recipeId&&recipes[recipeId]){
-        const r=recipes[recipeId];
-        recipes={...recipes,[recipeId]:{...r,cookCount:Math.max(0,(r.cookCount||1)-1)}};
-      }
-      return{...s,mealHistory:(s.mealHistory||[]).filter(h=>h.id!==id),recipes};
-    });
-  }
-  function reorderGroceryCategories(newOrder){setState(s=>({...s,groceryCategoryOrder:newOrder}));}
 
   function handleQuickLog({day,meal,label,recipeId,text,date}){
     let dateISO;if(day==='today')dateISO=todayISO();else if(day==='yesterday')dateISO=daysAgo(1);else dateISO=null;
@@ -1180,7 +998,7 @@ Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"stri
           <div className="flex items-center gap-3">
             <SyncBadge status={syncStatus} lastSynced={lastSynced} onSync={manualSync}/>
             <span className="text-xs text-stone-400 hidden sm:inline">{recipeList.length} {recipeList.length===1?'recipe':'recipes'}</span>
-            <button onClick={()=>setShowQuickLog(true)} title="Quick log a meal" className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800"><Zap className="w-3.5 h-3.5"/><span className="hidden sm:inline">Quick log</span></button>
+            <button onClick={()=>setShowQuickLog(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-orange-700 text-white text-xs hover:bg-orange-800"><Zap className="w-3.5 h-3.5"/><span className="hidden sm:inline">Quick log</span></button>
           </div>
         </div>
         <nav className="hidden sm:flex max-w-6xl mx-auto px-5 pb-3 gap-1 overflow-x-auto">
@@ -1192,9 +1010,7 @@ Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"stri
           );})}
         </nav>
       </header>
-
       {syncStatus==='error'&&<div className="bg-amber-50 border-b border-amber-200 px-5 py-2 text-xs text-amber-800 flex items-center justify-between"><span>⚠️ Sync failed{syncError?`: ${syncError}`:''}.</span><button onClick={manualSync} className="font-medium underline ml-2">Retry</button></div>}
-
       <main className="max-w-6xl mx-auto px-4 sm:px-5 py-6 sm:py-8 pb-24 sm:pb-8">
         {view==='home'&&<HomeView recipes={recipes} mealPlan={state.mealPlan} currentWeek={currentWeek} onSelectRecipe={id=>setSelectedRecipeId(id)} onGoToWeek={()=>setView('week')} onQuickLog={()=>setShowQuickLog(true)} onSaveRecipeGuide={saveRecipeGuide} onPrepWeek={generateWeekPrepGuide}/>}
         {view==='library'&&<LibraryView recipes={recipeList} onSelect={id=>setSelectedRecipeId(id)} onAdd={()=>setView('add')} onImport={imported=>{setState(s=>({...s,recipes:{...s.recipes,...Object.fromEntries(Object.entries(imported).map(([id,r])=>[id,{...r,id}]))}}));}}/>}
@@ -1204,8 +1020,6 @@ Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"stri
         {view==='insights'&&<InsightsView recipes={recipeList} onSaveRecipe={r=>saveRecipe(r)} mealHistory={state.mealHistory||[]} cookLog={state.cookLog||{}} onEditMealHistory={editMealHistory} onDeleteMealHistory={deleteMealHistory}/>}
         {view==='pantry'&&<PantryView pantry={state.pantry} onToggle={togglePantry}/>}
       </main>
-
-      {/* Mobile bottom nav — 5 tabs */}
       <nav className="sm:hidden fixed bottom-0 left-0 right-0 bg-stone-50/95 backdrop-blur border-t border-stone-200 z-30" style={{paddingBottom:'env(safe-area-inset-bottom,0)'}}>
         <div className="grid grid-cols-5">
           {mobTabs.map(tab=>{const Icon=tab.icon;const active=view===tab.id;return(
@@ -1217,19 +1031,7 @@ Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"stri
           );})}
         </div>
       </nav>
-
-      {/* Modals */}
-      {selectedRecipe&&!editingRecipe&&<RecipeDetailModal
-        recipe={selectedRecipe}
-        onClose={()=>setSelectedRecipeId(null)}
-        onEdit={()=>setEditingRecipe(selectedRecipe)}
-        onDelete={()=>{if(confirm(`Delete "${selectedRecipe.name}"?`)){deleteRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}}
-        onCook={()=>logCook(selectedRecipe.id)}
-        onRate={rating=>setRating(selectedRecipe.id,rating)}
-        onDuplicate={()=>{duplicateRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}
-        onSaveCookLog={saveCookLog}
-        onSaveRecipe={saveRecipe}
-      />}
+      {selectedRecipe&&!editingRecipe&&<RecipeDetailModal recipe={selectedRecipe} onClose={()=>setSelectedRecipeId(null)} onEdit={()=>setEditingRecipe(selectedRecipe)} onDelete={()=>{if(confirm(`Delete "${selectedRecipe.name}"?`)){deleteRecipe(selectedRecipe.id);setSelectedRecipeId(null);}}} onCook={()=>logCook(selectedRecipe.id)} onRate={rating=>setRating(selectedRecipe.id,rating)} onDuplicate={()=>{duplicateRecipe(selectedRecipe.id);setSelectedRecipeId(null);}} onSaveCookLog={saveCookLog} onSaveRecipe={saveRecipe}/>}
       {editingRecipe&&<EditRecipeModal recipe={editingRecipe} onSave={r=>{saveRecipe(r);setEditingRecipe(null);}} onCancel={()=>setEditingRecipe(null)} onDelete={()=>{if(confirm(`Delete "${editingRecipe.name}"?`)){deleteRecipe(editingRecipe.id);setEditingRecipe(null);setSelectedRecipeId(null);}}}/>}
       {planTarget&&<RecipePickerModal recipes={recipeList} recipeMap={recipes} title={`${planTarget.day} ${planTarget.meal}`} currentWeekPlan={state.mealPlan[planTarget.week]||{}} targetSlot={{day:planTarget.day,meal:planTarget.meal}} onPick={id=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,id);setPlanTarget(null);}} onPickLeftover={(od,om)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{leftoverFrom:{day:od,meal:om}});setPlanTarget(null);}} onPickEatingOut={(label)=>{planMeal(planTarget.week,planTarget.day,planTarget.meal,{slotType:'eating_out',label});setPlanTarget(null);}} onClose={()=>setPlanTarget(null)}/>}
       {showQuickLog&&<QuickLogModal onClose={()=>setShowQuickLog(false)} onLog={handleQuickLog} recipes={recipeList}/>}
@@ -1237,7 +1039,7 @@ Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"stri
         <h3 className="font-display text-2xl mb-1">Weekly prep guide</h3>
         <p className="text-sm text-stone-500 mb-4">{formatWeekRange(currentWeek)}</p>
         {weekPrepLoading&&<div className="flex items-center gap-2 py-8 justify-center text-stone-500"><Loader2 className="w-5 h-5 animate-spin text-orange-600"/><span>Analyzing your week…</span></div>}
-        {weekPrepGuide?.empty&&<p className="text-sm text-stone-500 py-4">No recipes planned this week yet. Add meals to your week plan first.</p>}
+        {weekPrepGuide?.empty&&<p className="text-sm text-stone-500 py-4">No recipes planned this week yet.</p>}
         {weekPrepGuide?.error&&<p className="text-sm text-red-600 py-4">{weekPrepGuide.error}</p>}
         {weekPrepGuide&&!weekPrepGuide.empty&&!weekPrepGuide.error&&!weekPrepLoading&&<div className="space-y-4">
           {weekPrepGuide.intro&&<p className="text-sm text-stone-600 bg-orange-50 border border-orange-100 rounded-xl p-3">{weekPrepGuide.intro}</p>}
@@ -1246,10 +1048,7 @@ Return ONLY JSON: {"intro":"string (1-2 sentence overview)","days":[{"day":"stri
               <p className="text-xs uppercase tracking-wider text-stone-500 font-medium mb-2">{d.day}</p>
               <div className="space-y-2">{(d.tasks||[]).map((t,j)=>(
                 <div key={j} className="bg-white border border-stone-200 rounded-xl p-3">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-xs font-medium text-orange-700">{t.recipe}</span>
-                    <span className="text-xs text-stone-400">{t.duration}</span>
-                  </div>
+                  <div className="flex items-center justify-between mb-0.5"><span className="text-xs font-medium text-orange-700">{t.recipe}</span><span className="text-xs text-stone-400">{t.duration}</span></div>
                   <p className="text-sm text-stone-700">{t.task}</p>
                   {t.storedUntil&&<p className="text-xs text-stone-400 mt-1">Keeps until: {t.storedUntil}</p>}
                 </div>
