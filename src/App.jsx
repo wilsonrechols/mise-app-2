@@ -26,6 +26,7 @@ const DAYS = [
 ];
 const MEALS = ['breakfast','lunch','dinner','snack'];
 const MAIN_MEALS = ['breakfast','lunch','dinner'];
+const MEAL_LABELS = {breakfast:'Breakfast',lunch:'Lunch',dinner:'Dinner',snack:'Snack / Dessert'};
 
 const DEFAULT_STATE = {
   recipes:{}, mealPlan:{}, cookedSlots:{}, manualGrocery:{}, groceryChecks:{},
@@ -469,7 +470,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         <div className="space-y-3">
           {todayMeals.map(({meal,slot,recipe,isEatingOut})=>(
             <div key={meal} className="flex items-center gap-3">
-              <span className="text-xs uppercase tracking-wider text-stone-400 w-16 flex-shrink-0">{meal}</span>
+              <span className="text-xs uppercase tracking-wider text-stone-400 w-16 flex-shrink-0">{MEAL_LABELS[meal]||meal}</span>
               {recipe?(
                 <div className="flex-1 flex items-center justify-between gap-2 bg-stone-50 rounded-xl px-3 py-2.5">
                   <button onClick={()=>onSelectRecipe(recipe.id)} className="font-display text-sm hover:text-orange-700 text-left flex-1">{recipe.name}</button>
@@ -500,7 +501,7 @@ function HomeView({recipes,mealPlan,currentWeek,weekPrepGuide,weekPrepChecks,onS
         <div className="space-y-3 mb-4">
           {cookableMeals.map(({meal,recipe})=>(
             <div key={meal} className="bg-orange-50 border border-orange-200 rounded-2xl p-5">
-              <p className="text-xs uppercase tracking-wider text-orange-600 font-medium mb-1">{meal}</p>
+              <p className="text-xs uppercase tracking-wider text-orange-600 font-medium mb-1">{MEAL_LABELS[meal]||meal}</p>
               <h3 className="font-display text-2xl mb-1">{recipe.name}</h3>
               <p className="text-sm text-stone-600 mb-4">
                 {((recipe.prepTime||0)+(recipe.cookTime||0))}m total · {recipe.servings} servings
@@ -727,7 +728,7 @@ function WeekPlanView({recipes,mealPlan,currentWeek,setCurrentWeek,cookedSlots,o
             return(
               <div key={m} className={`border rounded-lg p-2 min-h-[64px] ${isCooked?'border-emerald-200 bg-emerald-50/40':isEatingOut?'border-amber-200 bg-amber-50/30':isLO?'border-stone-100 bg-stone-50/40':'border-stone-100'}`}>
                 <div className="flex items-center justify-between mb-1 gap-1">
-                  <span className="text-[10px] uppercase tracking-wider text-stone-400">{m}</span>
+                  <span className="text-[10px] uppercase tracking-wider text-stone-400">{MEAL_LABELS[m]||m}</span>
                   <div className="flex items-center gap-1">
                     {isEatingOut&&<span className="text-[9px] uppercase text-amber-700 font-medium px-1.5 py-0.5 bg-amber-100 rounded-full">eating out</span>}
                     {isLO&&!orphaned&&!isEatingOut&&<span className="text-[9px] uppercase text-stone-500 font-medium px-1.5 py-0.5 bg-stone-100 rounded-full">leftover</span>}
@@ -1050,7 +1051,7 @@ function MealHistorySection({mealHistory,recipes,onEditEntry,onDeleteEntry,onCle
               <div key={i} className="bg-stone-100 rounded-xl p-3 space-y-2">
                 <input value={editForm.label} onChange={e=>setEditForm(f=>({...f,label:e.target.value}))} className="w-full px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none"/>
                 <div className="flex gap-2">
-                  <select value={editForm.meal} onChange={e=>setEditForm(f=>({...f,meal:e.target.value}))} className="px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none flex-1">{MEALS.map(m=><option key={m} value={m}>{m.charAt(0).toUpperCase()+m.slice(1)}</option>)}</select>
+                  <select value={editForm.meal} onChange={e=>setEditForm(f=>({...f,meal:e.target.value}))} className="px-2 py-1.5 bg-white border border-stone-200 rounded-lg text-sm focus:outline-none flex-1">{MEALS.map(m=><option key={m} value={m}>{MEAL_LABELS[m]||m.charAt(0).toUpperCase()+m.slice(1)}</option>)}</select>
                   <button onClick={saveEdit} className="px-3 py-1.5 rounded-lg bg-stone-900 text-white text-xs">Save</button>
                   <button onClick={()=>setEditingId(null)} className="px-3 py-1.5 rounded-lg border border-stone-200 text-xs text-stone-600">Cancel</button>
                 </div>
