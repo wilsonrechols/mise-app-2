@@ -8,7 +8,9 @@ const SCHEMA = `Return ONLY valid JSON, no markdown fences. Schema:
 
 async function callAI(prompt, options = {}) {
   const model = options.smart ? 'claude-sonnet-4-6' : 'claude-haiku-4-5-20251001';
-  const body = { model, max_tokens: options.maxTokens || 2000, messages: [{ role: 'user', content: prompt }] };
+  const history = options.history || [];
+  const messages = [...history, { role: 'user', content: prompt }];
+  const body = { model, max_tokens: options.maxTokens || 2000, messages };
   const r = await fetch(`${SERVER_URL}/ai`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(`AI error ${r.status}: ${e.error?.message || JSON.stringify(e)}`); }
   const d = await r.json();
@@ -30,7 +32,7 @@ function extractJSON(text) {
 
 const DAYS_KEYS = ['mon','tue','wed','thu','fri','sat','sun'];
 const DAYS_LABEL = { mon:'Mon', tue:'Tue', wed:'Wed', thu:'Thu', fri:'Fri', sat:'Sat', sun:'Sun' };
-const MEALS_LIST = ['breakfast','lunch','dinner'];
+const MEALS_LIST = ['breakfast','lunch','dinner','snack'];
 
 function detectIntent(text) {
   const t = text.toLowerCase();
@@ -400,6 +402,7 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState([]);
+  const [conversationHistory, setConversationHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(null);
   const [swapTarget, setSwapTarget] = useState(null);
@@ -409,6 +412,9 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
   const inputRef = useRef(null);
   const containerRef = useRef(null);
   const scrollAreaRef = useRef(null);
+
+  // Clear conversation history when chat is closed
+  useEffect(() => { if (!open) setConversationHistory([]); }, [open]);
 
   // When chat opens: scroll page so top of chat is visible, then focus input
   const justOpenedRef = useRef(false);
@@ -450,6 +456,7 @@ export function MealChat({ recipes, recipeList, mealPlan, mealHistory, currentWe
     const replyId = addMessage({ role: 'assistant', loading: true, loadingText: 'Thinking...' });
     const intent = detectIntent(trimmed);
     const context = buildContextBlock(recipes, mealPlan, mealHistory, currentWeek, weekPrepGuide);
+    const history = conversationHistory.slice(-12); // last 6 turns
 
     try {
       // --- SEARCH intent: find a new recipe from the web ---
@@ -472,7 +479,7 @@ Return ONLY valid JSON:
   "whyItFits": "1 sentence explanation of why this suits their taste"
 }`;
 
-        const searchRaw = await callAI(searchPrompt, { smart: true, maxTokens: 400 });
+        const searchRaw = await callAI(searchPrompt, { smart: true, maxTokens: 400, history });
         const searchData = extractJSON(searchRaw);
 
         updateMessage(replyId, { loadingText: `Fetching recipe from ${searchData.siteName || 'the web'}...` });
@@ -504,7 +511,7 @@ Return ONLY valid JSON:
         const next7Labels = next7Days.map(dk => DAYS_LABEL[dk]).join(', ');
         const planShape = next7Days.map(dk => `    "${dk}": { "breakfast": "recipeId or null", "lunch": "recipeId or null", "dinner": "recipeId or null" }`).join(',\n');
         const prompt = `You are a helpful meal planning assistant for the app "Mise".\n\n${context}\n\nUSER REQUEST: "${trimmed}"\n\nToday is ${DAYS_LABEL[getTodayDayKeyLocal()]}. Plan the NEXT 7 DAYS starting from TODAY (${next7Labels}) - do NOT fill in days that have already passed this week.\nUse recipes from the library above. Prefer variety - avoid repeating the same recipe more than twice.\nYou may include "eating out" slots (1-2 per week max unless the user asks for more).\nRespond ONLY with valid JSON in this exact shape - no markdown, no extra text:\n{\n  "message": "brief friendly intro (1-2 sentences)",\n  "plan": {\n${planShape}\n  }\n}\nFor eating-out slots use: { "slotType": "eating_out", "label": "Restaurant night" }\nFor empty/skipped slots use: null\nUse recipe IDs exactly as shown in the library (the id: values after each recipe name).\nIf the library has fewer than 21 recipes, reuse some or leave nulls.`;
-        const raw = await callAI(prompt, { smart: true, maxTokens: 2000 });
+        const raw = await callAI(prompt, { smart: true, maxTokens: 2000, history });
         const data = extractJSON(raw);
         const msgDraftPlan = data.plan || {};
         setDraftPlans(prev => ({ ...prev, [replyId]: JSON.parse(JSON.stringify(msgDraftPlan)) }));
@@ -513,7 +520,7 @@ Return ONLY valid JSON:
       // --- PREP intent ---
       } else if (intent === 'prep') {
         const prompt = `You are a meal prep coach inside the app "Mise".\n\n${context}\n\nUSER REQUEST: "${trimmed}"\n\nAnswer in 3-6 sentences. Be specific about what to prep given the current time and today's plan.\nIf relevant, mention which recipes to cook ahead and how to store things.\nEnd with a line like: RECIPE_LINKS: ["recipeId1","recipeId2"] listing at most 2 relevant recipes from the library (or empty array []).`;
-        const raw = await callAI(prompt, { smart: true, maxTokens: 600 });
+        const raw = await callAI(prompt, { smart: true, maxTokens: 600, history });
         const linkMatch = raw.match(/RECIPE_LINKS:\s*(\[.*?\])/s);
         let recipeLinks = [];
         const bodyText = raw.replace(/RECIPE_LINKS:.*$/s, '').trim();
@@ -523,7 +530,7 @@ Return ONLY valid JSON:
       // --- LOG intent ---
       } else if (intent === 'log') {
         const prompt = `You are a meal logging assistant inside "Mise".\n\n${context}\n\nUSER MESSAGE: "${trimmed}"\n\nParse what the user ate. Return ONLY valid JSON:\n{\n  "meal": "breakfast|lunch|dinner",\n  "label": "dish name",\n  "recipeId": "id from library or null",\n  "isNewFood": true/false,\n  "reply": "short friendly confirmation (1 sentence)"\n}`;
-        const data = extractJSON(await callAI(prompt, { smart: false, maxTokens: 400 }));
+        const data = extractJSON(await callAI(prompt, { smart: false, maxTokens: 400, history }));
         onAddMealHistory({ date: Date.now(), meal: data.meal || 'dinner', label: data.label || trimmed, recipeId: data.recipeId || null, slotType: data.recipeId ? 'recipe' : 'freetext' });
         const isNew = data.isNewFood && !data.recipeId;
         const saveLabel = data.label || trimmed;
@@ -536,13 +543,19 @@ Return ONLY valid JSON:
       // --- GENERAL ---
       } else {
         const prompt = `You are a helpful cooking and meal planning assistant inside the app "Mise".\n\n${context}\n\nUSER: "${trimmed}"\n\nRespond helpfully in 2-5 sentences. Be specific and use context from the user's meal plan and history.\nIf you mention specific recipes from their library, end with: RECIPE_LINKS: ["id1"] (empty array [] if none).`;
-        const raw = await callAI(prompt, { smart: false, maxTokens: 500 });
+        const raw = await callAI(prompt, { smart: false, maxTokens: 500, history });
         const linkMatch = raw.match(/RECIPE_LINKS:\s*(\[.*?\])/s);
         let recipeLinks = [];
         const bodyText = raw.replace(/RECIPE_LINKS:.*$/s, '').trim();
         if (linkMatch) { try { const ids = JSON.parse(linkMatch[1]); recipeLinks = ids.map(id => ({ id, name: recipes[id]?.name })).filter(r => r.name); } catch { } }
         updateMessage(replyId, { loading: false, text: bodyText, recipeLinks });
       }
+      // Update conversation history for follow-up context
+      setConversationHistory(prev => [
+        ...prev,
+        { role: 'user', content: trimmed },
+        { role: 'assistant', content: `[${intent} response]` }
+      ]);
     } catch (err) {
       updateMessage(replyId, { loading: false, text: 'Sorry, something went wrong. Try again.' });
       console.error('[MealChat]', err);
